@@ -1,10 +1,74 @@
 import math
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+
+DB_PATH = Path(__file__).parent / "ideas.db"
+
+
+def db_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ideas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            saved_at TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            name TEXT,
+            price REAL,
+            recommendation TEXT,
+            composite REAL,
+            fund_score REAL,
+            tech_score REAL,
+            sentiment_label TEXT,
+            thesis TEXT
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def save_idea(payload: dict) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO ideas (saved_at, ticker, name, price, recommendation,
+                               composite, fund_score, tech_score, sentiment_label, thesis)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.utcnow().isoformat(timespec="seconds"),
+                payload["ticker"],
+                payload.get("name"),
+                payload.get("price"),
+                payload["recommendation"],
+                payload["composite"],
+                payload["fund_score"],
+                payload["tech_score"],
+                payload["sentiment_label"],
+                payload.get("thesis", ""),
+            ),
+        )
+        conn.commit()
+
+
+def load_ideas() -> pd.DataFrame:
+    with db_connect() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM ideas ORDER BY saved_at DESC", conn
+        )
+
+
+def delete_idea(idea_id: int) -> None:
+    with db_connect() as conn:
+        conn.execute("DELETE FROM ideas WHERE id = ?", (idea_id,))
+        conn.commit()
 
 
 POSITIVE_WORDS = {
@@ -220,28 +284,7 @@ def fmt(v, suffix="", pct=False, money=False):
     return f"{v}{suffix}"
 
 
-def main():
-    st.set_page_config(page_title="Stock Idea Analyzer", layout="wide")
-    st.title("Stock Idea Analyzer")
-    st.caption("Pulls live data, runs a fundamentals + technicals + sentiment scorecard.")
-
-    with st.sidebar:
-        ticker = st.text_input("Ticker", value="AAPL").strip().upper()
-        thesis = st.text_area(
-            "Your thesis (optional)",
-            placeholder="Why do you like this stock? Risks?",
-            height=180,
-        )
-        run = st.button("Analyze", type="primary", use_container_width=True)
-
-    if not run:
-        st.info("Enter a ticker on the left and click **Analyze**.")
-        return
-
-    if not ticker:
-        st.error("Ticker is required.")
-        return
-
+def render_analysis(ticker: str, thesis: str) -> None:
     with st.spinner(f"Fetching {ticker}…"):
         try:
             hist, info = fetch_data(ticker)
@@ -270,6 +313,20 @@ def main():
     c2.metric("Market cap", fmt(fundamentals.get("market_cap"), money=True))
     c3.metric("Composite score", f"{composite:.0%}")
     c4.metric("Recommendation", rec)
+
+    if st.button("Save this idea", type="secondary"):
+        save_idea({
+            "ticker": ticker,
+            "name": fundamentals.get("name"),
+            "price": technicals.get("price"),
+            "recommendation": rec,
+            "composite": composite,
+            "fund_score": fund_score,
+            "tech_score": tech_score,
+            "sentiment_label": sentiment["label"],
+            "thesis": thesis,
+        })
+        st.success(f"Saved {ticker} to your ideas.")
 
     st.divider()
     left, right = st.columns([3, 2])
@@ -340,6 +397,75 @@ def main():
         f"Data via yfinance · Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} · "
         "Educational use only, not investment advice."
     )
+
+
+def render_saved_ideas() -> None:
+    df = load_ideas()
+    if df.empty:
+        st.info("No saved ideas yet. Analyze a ticker and click **Save this idea**.")
+        return
+
+    summary = df[[
+        "saved_at", "ticker", "name", "price", "recommendation",
+        "composite", "fund_score", "tech_score", "sentiment_label",
+    ]].copy()
+    summary["composite"] = (summary["composite"] * 100).round(0).astype(int).astype(str) + "%"
+    summary["fund_score"] = (summary["fund_score"] * 100).round(0).astype(int).astype(str) + "%"
+    summary["tech_score"] = (summary["tech_score"] * 100).round(0).astype(int).astype(str) + "%"
+    summary["price"] = summary["price"].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "—")
+    summary.columns = [
+        "Saved (UTC)", "Ticker", "Name", "Price", "Rec",
+        "Composite", "Fund", "Tech", "Sentiment",
+    ]
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("#### Manage")
+    for _, row in df.iterrows():
+        with st.expander(
+            f"{row['ticker']} · {row['recommendation']} · {row['saved_at']}"
+        ):
+            st.write(f"**Name:** {row['name'] or '—'}")
+            st.write(
+                f"**Composite:** {row['composite']:.0%} · "
+                f"**Fund:** {row['fund_score']:.0%} · "
+                f"**Tech:** {row['tech_score']:.0%} · "
+                f"**Sentiment:** {row['sentiment_label']}"
+            )
+            st.write("**Thesis:**")
+            st.write(row["thesis"] or "_(none)_")
+            if st.button("Delete", key=f"del-{row['id']}"):
+                delete_idea(int(row["id"]))
+                st.rerun()
+
+
+def main():
+    st.set_page_config(page_title="Stock Idea Analyzer", layout="wide")
+    st.title("Stock Idea Analyzer")
+    st.caption("Pulls live data, runs a fundamentals + technicals + sentiment scorecard.")
+
+    with st.sidebar:
+        ticker = st.text_input("Ticker", value="AAPL").strip().upper()
+        thesis = st.text_area(
+            "Your thesis (optional)",
+            placeholder="Why do you like this stock? Risks?",
+            height=180,
+        )
+        run = st.button("Analyze", type="primary", use_container_width=True)
+
+    analyze_tab, saved_tab = st.tabs(["Analyze", "Saved ideas"])
+
+    with analyze_tab:
+        if run:
+            if not ticker:
+                st.error("Ticker is required.")
+            else:
+                render_analysis(ticker, thesis)
+        else:
+            st.info("Enter a ticker on the left and click **Analyze**.")
+
+    with saved_tab:
+        render_saved_ideas()
 
 
 if __name__ == "__main__":
