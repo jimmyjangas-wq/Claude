@@ -1,5 +1,5 @@
 import math
-import sqlite3
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -7,68 +7,85 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from sqlalchemy import (
+    Column, DateTime, Float, Integer, MetaData, String, Table, Text,
+    create_engine, delete, insert, select,
+)
+from sqlalchemy.engine import Engine
 
-DB_PATH = Path(__file__).parent / "ideas.db"
+DEFAULT_SQLITE_URL = f"sqlite:///{Path(__file__).parent / 'ideas.db'}"
 
 
-def db_connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ideas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            saved_at TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            name TEXT,
-            price REAL,
-            recommendation TEXT,
-            composite REAL,
-            fund_score REAL,
-            tech_score REAL,
-            sentiment_label TEXT,
-            thesis TEXT
-        )
-        """
-    )
-    conn.commit()
-    return conn
+def _database_url() -> str:
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        try:
+            url = st.secrets.get("DATABASE_URL")  # type: ignore[attr-defined]
+        except Exception:
+            url = None
+    if not url:
+        return DEFAULT_SQLITE_URL
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+_metadata = MetaData()
+_ideas_table = Table(
+    "ideas",
+    _metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("saved_at", DateTime, nullable=False),
+    Column("ticker", String(16), nullable=False),
+    Column("name", String(256)),
+    Column("price", Float),
+    Column("recommendation", String(32)),
+    Column("composite", Float),
+    Column("fund_score", Float),
+    Column("tech_score", Float),
+    Column("sentiment_label", String(32)),
+    Column("thesis", Text),
+)
+
+
+@st.cache_resource
+def get_engine() -> Engine:
+    engine = create_engine(_database_url(), future=True)
+    _metadata.create_all(engine)
+    return engine
+
+
+def db_backend_label() -> str:
+    return get_engine().url.get_backend_name()
 
 
 def save_idea(payload: dict) -> None:
-    with db_connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO ideas (saved_at, ticker, name, price, recommendation,
-                               composite, fund_score, tech_score, sentiment_label, thesis)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                datetime.utcnow().isoformat(timespec="seconds"),
-                payload["ticker"],
-                payload.get("name"),
-                payload.get("price"),
-                payload["recommendation"],
-                payload["composite"],
-                payload["fund_score"],
-                payload["tech_score"],
-                payload["sentiment_label"],
-                payload.get("thesis", ""),
-            ),
-        )
-        conn.commit()
+    with get_engine().begin() as conn:
+        conn.execute(insert(_ideas_table).values(
+            saved_at=datetime.utcnow(),
+            ticker=payload["ticker"],
+            name=payload.get("name"),
+            price=payload.get("price"),
+            recommendation=payload["recommendation"],
+            composite=payload["composite"],
+            fund_score=payload["fund_score"],
+            tech_score=payload["tech_score"],
+            sentiment_label=payload["sentiment_label"],
+            thesis=payload.get("thesis", ""),
+        ))
 
 
 def load_ideas() -> pd.DataFrame:
-    with db_connect() as conn:
-        return pd.read_sql_query(
-            "SELECT * FROM ideas ORDER BY saved_at DESC", conn
+    with get_engine().connect() as conn:
+        return pd.read_sql(
+            select(_ideas_table).order_by(_ideas_table.c.saved_at.desc()),
+            conn,
         )
 
 
 def delete_idea(idea_id: int) -> None:
-    with db_connect() as conn:
-        conn.execute("DELETE FROM ideas WHERE id = ?", (idea_id,))
-        conn.commit()
+    with get_engine().begin() as conn:
+        conn.execute(delete(_ideas_table).where(_ideas_table.c.id == idea_id))
 
 
 POSITIVE_WORDS = {
@@ -400,6 +417,7 @@ def render_analysis(ticker: str, thesis: str) -> None:
 
 
 def render_saved_ideas() -> None:
+    st.caption(f"Storage backend: **{db_backend_label()}**")
     df = load_ideas()
     if df.empty:
         st.info("No saved ideas yet. Analyze a ticker and click **Save this idea**.")
@@ -418,6 +436,13 @@ def render_saved_ideas() -> None:
         "Composite", "Fund", "Tech", "Sentiment",
     ]
     st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "Download CSV",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name=f"stock_ideas_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
 
     st.divider()
     st.markdown("#### Manage")
