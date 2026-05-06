@@ -31,3 +31,19 @@ streamlit run app.py
 `postgres://` URLs are accepted and rewritten to `postgresql://` automatically. The `ideas` table is created on first run.
 
 Educational use only, not investment advice.
+
+## Client Risk Analyzer
+
+A second Streamlit tool, `client_risk.py`, scores payment risk for existing and potential clients and recommends mitigation terms drawn from a list of payment options you've pre-approved.
+
+```bash
+streamlit run client_risk.py
+```
+
+- **Research inputs** — industry, country, years trading, revenue, credit rating, payment history, scope/communication quality, cross-border, regulation, FX, free-text notes.
+- **Risk scorecard** — financial (50%) + engagement (25%) + external (25%) → composite score 0–100, labelled LOW / MODERATE / HIGH / CRITICAL.
+- **Mitigation engine** — picks a tailored bundle from your pre-agreed payment options (deposits, milestones, escrow, LC, retainer, Net 7/14/30, direct debit, late-payment clause, stage gates, WIP cap, personal guarantee, credit insurance, right to suspend service).
+- **Pre-agreed catalogue** — sidebar checkboxes control which terms the engine is allowed to recommend; defaults are sensible but fully editable per session.
+- **Saved profiles** — persisted to SQLite (`clients.db`, gitignored) or to the same `DATABASE_URL` as the stock tool. CSV export and per-row delete.
+
+Not legal or credit advice — tune scoring weights and the term catalogue to your business before relying on it.
