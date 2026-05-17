@@ -1,6 +1,9 @@
-# Stock Idea Analyzer
+# 🗂 Life Organizer
 
-A small Streamlit web app that pulls live market data and scores a stock idea on fundamentals, technicals, and the sentiment of your written thesis.
+One dashboard for every renewal, repair and bill in your life — insurance, boat
+and car repairs, servicing, warrants of fitness, registration, subscriptions.
+It tells you what's overdue, what's coming up, how much it all costs per year,
+and rolls recurring items forward automatically when you tick them off.
 
 ## Run
 
@@ -13,21 +16,38 @@ Open the URL Streamlit prints (usually http://localhost:8501).
 
 ## What it does
 
-- **Fundamentals** — P/E, PEG, margins, ROE, growth, debt, dividend (via `yfinance`).
-- **Technicals** — 50/200-day moving averages, golden cross, RSI(14), 52-week range, volatility.
-- **Sentiment** — counts positive/negative keywords in your written thesis.
-- **Scorecard** — weighted composite (50% fundamentals, 35% technicals, 15% sentiment) → BUY / HOLD / SELL.
-- **Saved ideas** — click "Save this idea" after analyzing to persist a snapshot. The "Saved ideas" tab lists everything with delete buttons and a **Download CSV** button.
+- **Assets** — register your car, boat, home, motorbike, caravan, etc. (with
+  rego / VIN / hull number) and attach obligations to them.
+- **Items** — track any recurring or one-off obligation: category, provider,
+  next due date, repeat interval, estimated cost and notes.
+- **Dashboard** — at-a-glance counts of what's overdue, due this week, and due
+  this month, plus your total **annual recurring cost**. Colour-coded and
+  sorted by urgency.
+- **Auto roll-forward** — tick an item **Mark done** and a recurring obligation
+  advances to its next due date by itself (weekly → annual). One-off items are
+  archived.
+- **Calendar export** — download an `.ics` file and import it into Google /
+  Apple / Outlook calendar. Recurring items repeat and each event reminds you
+  **7 days early**, so reminders run on their own. CSV export too.
 
 ## Storage
 
-By default ideas are saved to a local SQLite file (`ideas.db`, gitignored). To use Postgres instead, set a `DATABASE_URL` env var (or add it to `.streamlit/secrets.toml`):
+By default everything is saved to a local SQLite file (`life.db`, gitignored).
+To use Postgres instead, set a `DATABASE_URL` env var (or add it to
+`.streamlit/secrets.toml`):
 
 ```bash
 export DATABASE_URL=postgresql://user:pass@host:5432/dbname
 streamlit run app.py
 ```
 
-`postgres://` URLs are accepted and rewritten to `postgresql://` automatically. The `ideas` table is created on first run.
+`postgres://` URLs are accepted and rewritten to `postgresql://` automatically.
+Tables are created on first run.
 
-Educational use only, not investment advice.
+## A note on "complete automation"
+
+This app organises and reminds — it keeps everything in one place, tracks due
+dates, advances recurring items, and feeds reminders into your calendar so you
+don't have to remember anything. It can't legally sign contracts, book a
+mechanic, or pay bills for you, so think of it as the system that makes sure
+nothing is ever forgotten.

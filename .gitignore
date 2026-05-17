@@ -5,4 +5,4 @@ venv/
 .env
 .streamlit/secrets.toml
 .DS_Store
-ideas.db
+life.db

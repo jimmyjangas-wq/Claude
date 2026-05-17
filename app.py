@@ -1,20 +1,58 @@
-import math
+"""Life Organizer — track every renewal, repair and bill in one place.
+
+A Streamlit app that keeps every recurring obligation in your life (insurance,
+boat/car repairs, servicing, warrants of fitness, registration, bills) in one
+dashboard. It tells you what's overdue, what's coming up, how much it all costs
+per year, and rolls recurring items forward automatically when you tick them
+off. Export everything to your phone calendar so reminders fire on their own.
+"""
+
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import streamlit as st
-import yfinance as yf
+from dateutil.relativedelta import relativedelta
 from sqlalchemy import (
-    Column, DateTime, Float, Integer, MetaData, String, Table, Text,
-    create_engine, delete, insert, select,
+    Boolean, Column, Date, DateTime, Float, Integer, MetaData, String, Table,
+    Text, create_engine, delete, insert, select, update,
 )
 from sqlalchemy.engine import Engine
 
-DEFAULT_SQLITE_URL = f"sqlite:///{Path(__file__).parent / 'ideas.db'}"
+DEFAULT_SQLITE_URL = f"sqlite:///{Path(__file__).parent / 'life.db'}"
 
+ASSET_KINDS = ["Car", "Boat", "Motorbike", "Caravan / Trailer", "Home", "Other"]
+CATEGORIES = [
+    "Insurance", "Warrant of Fitness", "Registration", "Service / Maintenance",
+    "Repair", "Subscription / Bill", "Other",
+]
+RECURRENCES = {
+    "one-off": None,
+    "weekly": relativedelta(weeks=1),
+    "fortnightly": relativedelta(weeks=2),
+    "monthly": relativedelta(months=1),
+    "quarterly": relativedelta(months=3),
+    "6-monthly": relativedelta(months=6),
+    "annual": relativedelta(years=1),
+}
+OCCURRENCES_PER_YEAR = {
+    "weekly": 52, "fortnightly": 26, "monthly": 12,
+    "quarterly": 4, "6-monthly": 2, "annual": 1,
+}
+RRULE = {
+    "weekly": "FREQ=WEEKLY",
+    "fortnightly": "FREQ=WEEKLY;INTERVAL=2",
+    "monthly": "FREQ=MONTHLY",
+    "quarterly": "FREQ=MONTHLY;INTERVAL=3",
+    "6-monthly": "FREQ=MONTHLY;INTERVAL=6",
+    "annual": "FREQ=YEARLY",
+}
+
+
+# --------------------------------------------------------------------------
+# Database
+# --------------------------------------------------------------------------
 
 def _database_url() -> str:
     url = os.environ.get("DATABASE_URL")
@@ -31,20 +69,31 @@ def _database_url() -> str:
 
 
 _metadata = MetaData()
-_ideas_table = Table(
-    "ideas",
-    _metadata,
+
+_assets = Table(
+    "assets", _metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("saved_at", DateTime, nullable=False),
-    Column("ticker", String(16), nullable=False),
-    Column("name", String(256)),
-    Column("price", Float),
-    Column("recommendation", String(32)),
-    Column("composite", Float),
-    Column("fund_score", Float),
-    Column("tech_score", Float),
-    Column("sentiment_label", String(32)),
-    Column("thesis", Text),
+    Column("name", String(128), nullable=False),
+    Column("kind", String(32), nullable=False),
+    Column("identifier", String(128)),
+    Column("notes", Text),
+    Column("created_at", DateTime, nullable=False),
+)
+
+_obligations = Table(
+    "obligations", _metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", Integer),
+    Column("category", String(48), nullable=False),
+    Column("title", String(256), nullable=False),
+    Column("provider", String(128)),
+    Column("due_date", Date, nullable=False),
+    Column("recurrence", String(24), nullable=False, default="one-off"),
+    Column("cost", Float),
+    Column("notes", Text),
+    Column("last_completed", Date),
+    Column("active", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime, nullable=False),
 )
 
 
@@ -59,438 +108,430 @@ def db_backend_label() -> str:
     return get_engine().url.get_backend_name()
 
 
-def save_idea(payload: dict) -> None:
+def add_asset(name: str, kind: str, identifier: str, notes: str) -> None:
     with get_engine().begin() as conn:
-        conn.execute(insert(_ideas_table).values(
-            saved_at=datetime.utcnow(),
-            ticker=payload["ticker"],
-            name=payload.get("name"),
-            price=payload.get("price"),
-            recommendation=payload["recommendation"],
-            composite=payload["composite"],
-            fund_score=payload["fund_score"],
-            tech_score=payload["tech_score"],
-            sentiment_label=payload["sentiment_label"],
-            thesis=payload.get("thesis", ""),
+        conn.execute(insert(_assets).values(
+            name=name, kind=kind, identifier=identifier or None,
+            notes=notes or None, created_at=datetime.utcnow(),
         ))
 
 
-def load_ideas() -> pd.DataFrame:
-    with get_engine().connect() as conn:
-        return pd.read_sql(
-            select(_ideas_table).order_by(_ideas_table.c.saved_at.desc()),
-            conn,
-        )
-
-
-def delete_idea(idea_id: int) -> None:
+def update_asset(asset_id: int, **fields) -> None:
     with get_engine().begin() as conn:
-        conn.execute(delete(_ideas_table).where(_ideas_table.c.id == idea_id))
+        conn.execute(update(_assets).where(_assets.c.id == asset_id).values(**fields))
 
 
-POSITIVE_WORDS = {
-    "growth", "growing", "strong", "beat", "beats", "moat", "undervalued",
-    "cheap", "bullish", "buy", "expand", "expanding", "innovative", "leader",
-    "dominant", "profitable", "upside", "tailwind", "tailwinds", "accelerating",
-    "outperform", "momentum", "breakout", "raise", "raised", "guidance",
-    "dividend", "buyback", "buybacks", "record", "surge", "soar",
-}
-NEGATIVE_WORDS = {
-    "decline", "declining", "weak", "miss", "misses", "overvalued", "expensive",
-    "bearish", "sell", "shrink", "shrinking", "lawsuit", "fraud", "debt",
-    "dilution", "downside", "headwind", "headwinds", "slowing", "underperform",
-    "breakdown", "cut", "cuts", "warning", "loss", "losses", "drop", "plunge",
-    "risk", "risks", "regulatory", "investigation",
-}
+def delete_asset(asset_id: int) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(update(_obligations)
+                     .where(_obligations.c.asset_id == asset_id)
+                     .values(asset_id=None))
+        conn.execute(delete(_assets).where(_assets.c.id == asset_id))
 
 
-def fetch_data(ticker: str):
-    t = yf.Ticker(ticker)
-    hist = t.history(period="2y", auto_adjust=True)
-    info = {}
-    try:
-        info = t.info or {}
-    except Exception:
-        pass
-    return hist, info
+def load_assets() -> pd.DataFrame:
+    with get_engine().connect() as conn:
+        return pd.read_sql(select(_assets).order_by(_assets.c.name), conn)
 
 
-def rsi(series: pd.Series, period: int = 14) -> float:
-    if len(series) < period + 1:
-        return float("nan")
-    delta = series.diff().dropna()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi_series = 100 - (100 / (1 + rs))
-    return float(rsi_series.iloc[-1])
+def add_obligation(**fields) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(insert(_obligations).values(
+            active=True, created_at=datetime.utcnow(), **fields,
+        ))
 
 
-def compute_technicals(hist: pd.DataFrame) -> dict:
-    close = hist["Close"].dropna()
-    if close.empty:
-        return {}
-    last = float(close.iloc[-1])
-    ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else float("nan")
-    ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else float("nan")
-    pct_52w_high = float(close.iloc[-252:].max()) if len(close) >= 1 else float("nan")
-    pct_52w_low = float(close.iloc[-252:].min()) if len(close) >= 1 else float("nan")
-    returns = close.pct_change().dropna()
-    vol_annual = float(returns.std() * math.sqrt(252)) if not returns.empty else float("nan")
-    return {
-        "price": last,
-        "ma50": ma50,
-        "ma200": ma200,
-        "above_ma50": last > ma50 if not math.isnan(ma50) else None,
-        "above_ma200": last > ma200 if not math.isnan(ma200) else None,
-        "golden_cross": (ma50 > ma200) if not (math.isnan(ma50) or math.isnan(ma200)) else None,
-        "rsi14": rsi(close, 14),
-        "high_52w": pct_52w_high,
-        "low_52w": pct_52w_low,
-        "from_52w_high_pct": (last / pct_52w_high - 1) * 100 if pct_52w_high else float("nan"),
-        "vol_annualized_pct": vol_annual * 100 if not math.isnan(vol_annual) else float("nan"),
-    }
+def update_obligation(obligation_id: int, **fields) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(update(_obligations)
+                     .where(_obligations.c.id == obligation_id)
+                     .values(**fields))
 
 
-def compute_fundamentals(info: dict) -> dict:
-    def g(key):
-        v = info.get(key)
-        return v if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)) else None
-
-    return {
-        "name": info.get("longName") or info.get("shortName"),
-        "sector": info.get("sector"),
-        "industry": info.get("industry"),
-        "market_cap": g("marketCap"),
-        "pe_trailing": g("trailingPE"),
-        "pe_forward": g("forwardPE"),
-        "peg": g("pegRatio"),
-        "pb": g("priceToBook"),
-        "ps": g("priceToSalesTrailing12Months"),
-        "profit_margin": g("profitMargins"),
-        "roe": g("returnOnEquity"),
-        "revenue_growth": g("revenueGrowth"),
-        "earnings_growth": g("earningsGrowth"),
-        "debt_to_equity": g("debtToEquity"),
-        "dividend_yield": g("dividendYield"),
-        "beta": g("beta"),
-        "summary": info.get("longBusinessSummary"),
-    }
+def delete_obligation(obligation_id: int) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(delete(_obligations).where(_obligations.c.id == obligation_id))
 
 
-def sentiment_score(text: str) -> dict:
-    if not text or not text.strip():
-        return {"score": 0, "positive": 0, "negative": 0, "label": "n/a"}
-    words = [w.strip(".,!?():;\"'").lower() for w in text.split()]
-    pos = sum(1 for w in words if w in POSITIVE_WORDS)
-    neg = sum(1 for w in words if w in NEGATIVE_WORDS)
-    total = pos + neg
-    if total == 0:
-        return {"score": 0, "positive": 0, "negative": 0, "label": "neutral"}
-    score = (pos - neg) / total
-    if score > 0.25:
-        label = "positive"
-    elif score < -0.25:
-        label = "negative"
+def load_obligations(include_archived: bool = False) -> pd.DataFrame:
+    stmt = select(_obligations)
+    if not include_archived:
+        stmt = stmt.where(_obligations.c.active.is_(True))
+    with get_engine().connect() as conn:
+        df = pd.read_sql(stmt.order_by(_obligations.c.due_date), conn)
+    if not df.empty:
+        df["due_date"] = pd.to_datetime(df["due_date"]).dt.date
+        df["last_completed"] = pd.to_datetime(df["last_completed"]).dt.date
+    return df
+
+
+# --------------------------------------------------------------------------
+# Logic
+# --------------------------------------------------------------------------
+
+def next_due(due: date, recurrence: str) -> date | None:
+    """Roll a due date forward by one recurrence interval, skipping past today."""
+    delta = RECURRENCES.get(recurrence)
+    if delta is None:
+        return None
+    nd = due + delta
+    today = date.today()
+    while nd <= today:
+        nd += delta
+    return nd
+
+
+def complete_obligation(row: pd.Series) -> None:
+    """Tick an obligation off. Recurring items roll forward; one-offs archive."""
+    nd = next_due(row["due_date"], row["recurrence"])
+    if nd is not None:
+        update_obligation(int(row["id"]), due_date=nd, last_completed=date.today())
     else:
-        label = "mixed"
-    return {"score": score, "positive": pos, "negative": neg, "label": label}
+        update_obligation(int(row["id"]), active=False, last_completed=date.today())
 
 
-def score_fundamentals(f: dict) -> tuple[float, list[str]]:
-    notes, points, max_points = [], 0.0, 0.0
-
-    def add(condition_value, weight, good_msg, bad_msg, neutral_msg=None):
-        nonlocal points, max_points
-        max_points += weight
-        if condition_value is True:
-            points += weight
-            notes.append(f"+ {good_msg}")
-        elif condition_value is False:
-            notes.append(f"- {bad_msg}")
-        elif neutral_msg:
-            notes.append(f"~ {neutral_msg}")
-
-    pe = f.get("pe_forward") or f.get("pe_trailing")
-    add(pe is not None and 0 < pe < 20, 1.5, f"P/E reasonable ({pe:.1f})" if pe else "",
-        f"P/E elevated ({pe:.1f})" if pe else "P/E unavailable")
-
-    peg = f.get("peg")
-    add(peg is not None and 0 < peg < 1.5, 1.0, f"PEG attractive ({peg:.2f})" if peg else "",
-        f"PEG high ({peg:.2f})" if peg else "PEG unavailable")
-
-    rg = f.get("revenue_growth")
-    add(rg is not None and rg > 0.10, 1.5, f"Revenue growth strong ({rg:.0%})" if rg is not None else "",
-        f"Revenue growth weak ({rg:.0%})" if rg is not None else "Revenue growth unavailable")
-
-    roe = f.get("roe")
-    add(roe is not None and roe > 0.15, 1.0, f"ROE healthy ({roe:.0%})" if roe is not None else "",
-        f"ROE low ({roe:.0%})" if roe is not None else "ROE unavailable")
-
-    pm = f.get("profit_margin")
-    add(pm is not None and pm > 0.10, 1.0, f"Profit margin solid ({pm:.0%})" if pm is not None else "",
-        f"Profit margin thin ({pm:.0%})" if pm is not None else "Margin unavailable")
-
-    de = f.get("debt_to_equity")
-    add(de is not None and de < 100, 1.0, f"Debt/equity moderate ({de:.0f})" if de is not None else "",
-        f"Debt/equity high ({de:.0f})" if de is not None else "Debt unavailable")
-
-    return (points / max_points if max_points else 0), notes
+def status_of(due: date) -> str:
+    days = (due - date.today()).days
+    if days < 0:
+        return "Overdue"
+    if days <= 7:
+        return "Due this week"
+    if days <= 30:
+        return "Due this month"
+    return "Upcoming"
 
 
-def score_technicals(t: dict) -> tuple[float, list[str]]:
-    notes, points, max_points = [], 0.0, 0.0
-
-    def add(condition_value, weight, good_msg, bad_msg):
-        nonlocal points, max_points
-        max_points += weight
-        if condition_value is True:
-            points += weight
-            notes.append(f"+ {good_msg}")
-        elif condition_value is False:
-            notes.append(f"- {bad_msg}")
-
-    add(t.get("above_ma50"), 1.0, "Price above 50-day MA", "Price below 50-day MA")
-    add(t.get("above_ma200"), 1.5, "Price above 200-day MA", "Price below 200-day MA")
-    add(t.get("golden_cross"), 1.0, "50-day above 200-day (bullish trend)", "50-day below 200-day (bearish trend)")
-
-    rsi_v = t.get("rsi14")
-    if rsi_v is not None and not math.isnan(rsi_v):
-        max_points += 1.0
-        if 40 <= rsi_v <= 65:
-            points += 1.0
-            notes.append(f"+ RSI healthy ({rsi_v:.0f})")
-        elif rsi_v > 70:
-            notes.append(f"- RSI overbought ({rsi_v:.0f})")
-        elif rsi_v < 30:
-            notes.append(f"~ RSI oversold ({rsi_v:.0f}) — possible bounce")
-            points += 0.5
-        else:
-            notes.append(f"~ RSI neutral ({rsi_v:.0f})")
-            points += 0.5
-
-    return (points / max_points if max_points else 0), notes
+STATUS_ICON = {
+    "Overdue": "🔴", "Due this week": "🟠",
+    "Due this month": "🟡", "Upcoming": "🟢",
+}
 
 
-def overall_recommendation(fund_score: float, tech_score: float, sent: dict) -> tuple[str, float]:
-    sent_norm = (sent["score"] + 1) / 2 if sent["label"] != "n/a" else 0.5
-    weights = {"fund": 0.5, "tech": 0.35, "sent": 0.15}
-    composite = fund_score * weights["fund"] + tech_score * weights["tech"] + sent_norm * weights["sent"]
-    if composite >= 0.65:
-        return "BUY", composite
-    if composite >= 0.45:
-        return "HOLD", composite
-    return "SELL / AVOID", composite
+def annualised_cost(df: pd.DataFrame) -> float:
+    total = 0.0
+    for _, row in df.iterrows():
+        if pd.isna(row.get("cost")):
+            continue
+        per_year = OCCURRENCES_PER_YEAR.get(row["recurrence"])
+        if per_year:
+            total += float(row["cost"]) * per_year
+    return total
 
 
-def fmt(v, suffix="", pct=False, money=False):
-    if v is None or (isinstance(v, float) and math.isnan(v)):
-        return "—"
-    if pct:
-        return f"{v * 100:.1f}%"
-    if money:
-        if v >= 1e12:
-            return f"${v / 1e12:.2f}T"
-        if v >= 1e9:
-            return f"${v / 1e9:.2f}B"
-        if v >= 1e6:
-            return f"${v / 1e6:.2f}M"
-        return f"${v:,.0f}"
-    if isinstance(v, float):
-        return f"{v:.2f}{suffix}"
-    return f"{v}{suffix}"
-
-
-def render_analysis(ticker: str, thesis: str) -> None:
-    with st.spinner(f"Fetching {ticker}…"):
-        try:
-            hist, info = fetch_data(ticker)
-        except Exception as e:
-            st.error(f"Failed to fetch {ticker}: {e}")
-            return
-
-    if hist.empty:
-        st.error(f"No price data for {ticker}.")
-        return
-
-    fundamentals = compute_fundamentals(info)
-    technicals = compute_technicals(hist)
-    sentiment = sentiment_score(thesis)
-    fund_score, fund_notes = score_fundamentals(fundamentals)
-    tech_score, tech_notes = score_technicals(technicals)
-    rec, composite = overall_recommendation(fund_score, tech_score, sentiment)
-
-    header = f"{fundamentals['name'] or ticker} ({ticker})"
-    if fundamentals.get("sector"):
-        header += f" — {fundamentals['sector']}"
-    st.subheader(header)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Price", fmt(technicals.get("price"), money=True))
-    c2.metric("Market cap", fmt(fundamentals.get("market_cap"), money=True))
-    c3.metric("Composite score", f"{composite:.0%}")
-    c4.metric("Recommendation", rec)
-
-    if st.button("Save this idea", type="secondary"):
-        save_idea({
-            "ticker": ticker,
-            "name": fundamentals.get("name"),
-            "price": technicals.get("price"),
-            "recommendation": rec,
-            "composite": composite,
-            "fund_score": fund_score,
-            "tech_score": tech_score,
-            "sentiment_label": sentiment["label"],
-            "thesis": thesis,
-        })
-        st.success(f"Saved {ticker} to your ideas.")
-
-    st.divider()
-    left, right = st.columns([3, 2])
-
-    with left:
-        st.markdown("#### Price (2y)")
-        st.line_chart(hist["Close"])
-
-        st.markdown("#### Scorecard notes")
-        st.markdown(f"**Fundamentals — {fund_score:.0%}**")
-        for n in fund_notes:
-            st.write(n)
-        st.markdown(f"**Technicals — {tech_score:.0%}**")
-        for n in tech_notes:
-            st.write(n)
-        st.markdown(f"**Thesis sentiment — {sentiment['label']}**")
-        st.write(
-            f"Positive words: {sentiment['positive']} · Negative words: {sentiment['negative']}"
-        )
-
-    with right:
-        st.markdown("#### Fundamentals")
-        st.table(pd.DataFrame({
-            "Metric": [
-                "P/E (trailing)", "P/E (forward)", "PEG", "P/B", "P/S",
-                "Profit margin", "ROE", "Revenue growth", "Earnings growth",
-                "Debt/Equity", "Dividend yield", "Beta",
-            ],
-            "Value": [
-                fmt(fundamentals["pe_trailing"]),
-                fmt(fundamentals["pe_forward"]),
-                fmt(fundamentals["peg"]),
-                fmt(fundamentals["pb"]),
-                fmt(fundamentals["ps"]),
-                fmt(fundamentals["profit_margin"], pct=True),
-                fmt(fundamentals["roe"], pct=True),
-                fmt(fundamentals["revenue_growth"], pct=True),
-                fmt(fundamentals["earnings_growth"], pct=True),
-                fmt(fundamentals["debt_to_equity"]),
-                fmt(fundamentals["dividend_yield"], pct=True),
-                fmt(fundamentals["beta"]),
-            ],
-        }))
-
-        st.markdown("#### Technicals")
-        st.table(pd.DataFrame({
-            "Metric": [
-                "50-day MA", "200-day MA", "RSI(14)",
-                "52w high", "52w low", "From 52w high",
-                "Annualized vol",
-            ],
-            "Value": [
-                fmt(technicals.get("ma50")),
-                fmt(technicals.get("ma200")),
-                fmt(technicals.get("rsi14")),
-                fmt(technicals.get("high_52w")),
-                fmt(technicals.get("low_52w")),
-                fmt(technicals.get("from_52w_high_pct"), suffix="%"),
-                fmt(technicals.get("vol_annualized_pct"), suffix="%"),
-            ],
-        }))
-
-    if fundamentals.get("summary"):
-        with st.expander("Business summary"):
-            st.write(fundamentals["summary"])
-
-    st.caption(
-        f"Data via yfinance · Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} · "
-        "Educational use only, not investment advice."
-    )
-
-
-def render_saved_ideas() -> None:
-    st.caption(f"Storage backend: **{db_backend_label()}**")
-    df = load_ideas()
+def enrich(df: pd.DataFrame, assets: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        st.info("No saved ideas yet. Analyze a ticker and click **Save this idea**.")
+        return df
+    df = df.copy()
+    df["days_left"] = df["due_date"].map(lambda d: (d - date.today()).days)
+    df["status"] = df["due_date"].map(status_of)
+    asset_names = dict(zip(assets["id"], assets["name"])) if not assets.empty else {}
+    df["asset_name"] = df["asset_id"].map(
+        lambda a: asset_names.get(a, "—") if pd.notna(a) else "—")
+    return df.sort_values("due_date")
+
+
+# --------------------------------------------------------------------------
+# Calendar export
+# --------------------------------------------------------------------------
+
+def _ics_escape(text: str) -> str:
+    return (text.replace("\\", "\\\\").replace(";", "\\;")
+                .replace(",", "\\,").replace("\n", "\\n"))
+
+
+def build_ics(df: pd.DataFrame, assets: pd.DataFrame) -> str:
+    asset_names = dict(zip(assets["id"], assets["name"])) if not assets.empty else {}
+    now = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//Life Organizer//EN", "CALSCALE:GREGORIAN",
+    ]
+    for _, row in df.iterrows():
+        d = row["due_date"]
+        summary = row["title"]
+        asset = asset_names.get(row["asset_id"]) if pd.notna(row["asset_id"]) else None
+        if asset:
+            summary = f"{summary} ({asset})"
+        desc_bits = [f"Category: {row['category']}"]
+        if pd.notna(row.get("provider")) and row["provider"]:
+            desc_bits.append(f"Provider: {row['provider']}")
+        if pd.notna(row.get("cost")):
+            desc_bits.append(f"Est. cost: ${float(row['cost']):,.2f}")
+        if pd.notna(row.get("notes")) and row["notes"]:
+            desc_bits.append(str(row["notes"]))
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:obligation-{row['id']}@life-organizer",
+            f"DTSTAMP:{now}",
+            f"DTSTART;VALUE=DATE:{d.strftime('%Y%m%d')}",
+            f"SUMMARY:{_ics_escape(summary)}",
+            f"DESCRIPTION:{_ics_escape(' — '.join(desc_bits))}",
+        ]
+        rule = RRULE.get(row["recurrence"])
+        if rule:
+            lines.append(f"RRULE:{rule}")
+        lines += [
+            "BEGIN:VALARM", "ACTION:DISPLAY",
+            f"DESCRIPTION:{_ics_escape(summary)} is coming up",
+            "TRIGGER:-P7D", "END:VALARM",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# UI
+# --------------------------------------------------------------------------
+
+def _money(v) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"${float(v):,.2f}"
+
+
+def obligation_form(assets: pd.DataFrame, existing: pd.Series | None = None) -> None:
+    """Render an add/edit form. If `existing` is given, edits that row."""
+    is_edit = existing is not None
+    key = f"edit-{existing['id']}" if is_edit else "add"
+    asset_opts = ["(none)"] + (list(assets["name"]) if not assets.empty else [])
+    asset_ids = [None] + (list(assets["id"]) if not assets.empty else [])
+
+    with st.form(key=f"form-{key}"):
+        c1, c2 = st.columns(2)
+        title = c1.text_input("Title", value=existing["title"] if is_edit else "")
+        category = c2.selectbox(
+            "Category", CATEGORIES,
+            index=CATEGORIES.index(existing["category"]) if is_edit
+            and existing["category"] in CATEGORIES else 0)
+
+        c3, c4 = st.columns(2)
+        cur_asset = 0
+        if is_edit and pd.notna(existing["asset_id"]) and existing["asset_id"] in asset_ids:
+            cur_asset = asset_ids.index(existing["asset_id"])
+        asset_pick = c3.selectbox("Asset", asset_opts, index=cur_asset)
+        provider = c4.text_input(
+            "Provider / company",
+            value=existing["provider"] if is_edit and pd.notna(existing["provider"]) else "")
+
+        c5, c6, c7 = st.columns(3)
+        due = c5.date_input(
+            "Next due date",
+            value=existing["due_date"] if is_edit else date.today())
+        rec_keys = list(RECURRENCES.keys())
+        recurrence = c6.selectbox(
+            "Repeats", rec_keys,
+            index=rec_keys.index(existing["recurrence"]) if is_edit
+            and existing["recurrence"] in rec_keys else 0)
+        cost = c7.number_input(
+            "Estimated cost ($)", min_value=0.0, step=10.0,
+            value=float(existing["cost"]) if is_edit and pd.notna(existing["cost"]) else 0.0)
+
+        notes = st.text_area(
+            "Notes", value=existing["notes"] if is_edit and pd.notna(existing["notes"]) else "")
+
+        submitted = st.form_submit_button(
+            "Save changes" if is_edit else "Add item", type="primary")
+        if submitted:
+            if not title.strip():
+                st.error("Title is required.")
+                return
+            picked_id = asset_ids[asset_opts.index(asset_pick)]
+            fields = dict(
+                asset_id=picked_id, category=category, title=title.strip(),
+                provider=provider.strip() or None, due_date=due,
+                recurrence=recurrence, cost=cost or None,
+                notes=notes.strip() or None,
+            )
+            if is_edit:
+                update_obligation(int(existing["id"]), **fields)
+                st.success("Updated.")
+            else:
+                add_obligation(**fields)
+                st.success(f"Added “{title.strip()}”.")
+            st.rerun()
+
+
+def render_dashboard(df: pd.DataFrame, assets: pd.DataFrame) -> None:
+    st.subheader("Everything you need to stay on top of")
+    if df.empty:
+        st.info("Nothing tracked yet. Add your first item in the **Items** tab — "
+                "or an asset (car, boat, home) in the **Assets** tab.")
         return
 
-    summary = df[[
-        "saved_at", "ticker", "name", "price", "recommendation",
-        "composite", "fund_score", "tech_score", "sentiment_label",
-    ]].copy()
-    summary["composite"] = (summary["composite"] * 100).round(0).astype(int).astype(str) + "%"
-    summary["fund_score"] = (summary["fund_score"] * 100).round(0).astype(int).astype(str) + "%"
-    summary["tech_score"] = (summary["tech_score"] * 100).round(0).astype(int).astype(str) + "%"
-    summary["price"] = summary["price"].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "—")
-    summary.columns = [
-        "Saved (UTC)", "Ticker", "Name", "Price", "Rec",
-        "Composite", "Fund", "Tech", "Sentiment",
-    ]
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    overdue = df[df["status"] == "Overdue"]
+    week = df[df["status"] == "Due this week"]
+    month = df[df["status"] == "Due this month"]
 
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Overdue", len(overdue))
+    m2.metric("Due this week", len(week))
+    m3.metric("Due this month", len(month))
+    m4.metric("Annual recurring cost", _money(annualised_cost(df)))
+
+    def section(title: str, subset: pd.DataFrame) -> None:
+        if subset.empty:
+            return
+        st.markdown(f"#### {title}")
+        for _, row in subset.iterrows():
+            cols = st.columns([5, 2, 2, 2])
+            label = f"{STATUS_ICON[row['status']]} **{row['title']}**"
+            if row["asset_name"] != "—":
+                label += f" · {row['asset_name']}"
+            cols[0].markdown(f"{label}\n\n_{row['category']}_")
+            days = row["days_left"]
+            when = (f"{-days}d overdue" if days < 0
+                    else "due today" if days == 0 else f"in {days}d")
+            cols[1].markdown(f"{row['due_date']}\n\n_{when}_")
+            cols[2].markdown(f"{_money(row['cost'])}\n\n_{row['recurrence']}_")
+            if cols[3].button("Mark done", key=f"done-{row['id']}"):
+                complete_obligation(row)
+                st.rerun()
+        st.divider()
+
+    section("🔴 Overdue — handle these now", overdue)
+    section("🟠 Due this week", week)
+    section("🟡 Due this month", month)
+    section("🟢 Coming up later", df[df["status"] == "Upcoming"])
+
+
+def render_items(df: pd.DataFrame, assets: pd.DataFrame) -> None:
+    with st.expander("➕ Add a new item", expanded=df.empty):
+        obligation_form(assets)
+
+    if df.empty:
+        return
+
+    st.markdown("#### Tracked items")
+    view = df[["status", "title", "category", "asset_name", "due_date",
+               "recurrence", "cost", "provider"]].copy()
+    view["cost"] = view["cost"].map(_money)
+    view.columns = ["Status", "Title", "Category", "Asset", "Due",
+                    "Repeats", "Cost", "Provider"]
+    st.dataframe(view, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Edit / complete / delete")
+    for _, row in df.iterrows():
+        head = (f"{STATUS_ICON[row['status']]} {row['title']} · "
+                f"{row['category']} · due {row['due_date']}")
+        with st.expander(head):
+            obligation_form(assets, existing=row)
+            c1, c2 = st.columns(2)
+            if c1.button("✓ Mark done", key=f"item-done-{row['id']}"):
+                complete_obligation(row)
+                st.rerun()
+            if c2.button("🗑 Delete", key=f"item-del-{row['id']}"):
+                delete_obligation(int(row["id"]))
+                st.rerun()
+
+
+def render_assets(assets: pd.DataFrame, df: pd.DataFrame) -> None:
+    with st.expander("➕ Add an asset", expanded=assets.empty):
+        with st.form("add-asset"):
+            c1, c2 = st.columns(2)
+            name = c1.text_input("Name", placeholder="e.g. Toyota Hilux")
+            kind = c2.selectbox("Type", ASSET_KINDS)
+            identifier = st.text_input(
+                "Identifier", placeholder="Rego / VIN / hull number (optional)")
+            notes = st.text_area("Notes")
+            if st.form_submit_button("Add asset", type="primary"):
+                if not name.strip():
+                    st.error("Name is required.")
+                else:
+                    add_asset(name.strip(), kind, identifier.strip(), notes.strip())
+                    st.success(f"Added {name.strip()}.")
+                    st.rerun()
+
+    if assets.empty:
+        st.info("No assets yet. Add your car, boat or home above, then attach "
+                "insurance, repairs and warrants to it.")
+        return
+
+    counts = df["asset_id"].value_counts() if not df.empty else {}
+    for _, row in assets.iterrows():
+        n = int(counts.get(row["id"], 0)) if not df.empty else 0
+        with st.expander(f"{row['name']} · {row['kind']} · {n} item(s)"):
+            with st.form(f"edit-asset-{row['id']}"):
+                c1, c2 = st.columns(2)
+                name = c1.text_input("Name", value=row["name"])
+                kind = c2.selectbox(
+                    "Type", ASSET_KINDS, index=ASSET_KINDS.index(row["kind"])
+                    if row["kind"] in ASSET_KINDS else 0)
+                identifier = st.text_input(
+                    "Identifier", value=row["identifier"] or "")
+                notes = st.text_area("Notes", value=row["notes"] or "")
+                if st.form_submit_button("Save", type="primary"):
+                    update_asset(int(row["id"]), name=name.strip(), kind=kind,
+                                 identifier=identifier.strip() or None,
+                                 notes=notes.strip() or None)
+                    st.success("Saved.")
+                    st.rerun()
+            if st.button("🗑 Delete asset", key=f"asset-del-{row['id']}"):
+                delete_asset(int(row["id"]))
+                st.rerun()
+
+
+def render_calendar(df: pd.DataFrame, assets: pd.DataFrame) -> None:
+    st.markdown("#### Export to your phone calendar")
+    st.write(
+        "Download a calendar file and import it into Google Calendar, Apple "
+        "Calendar or Outlook. Recurring items repeat automatically and each "
+        "event reminds you **7 days before** — so the reminders run themselves."
+    )
+    if df.empty:
+        st.info("Add some items first.")
+        return
     st.download_button(
-        "Download CSV",
+        "Download calendar (.ics)",
+        data=build_ics(df, assets).encode("utf-8"),
+        file_name=f"life_organizer_{date.today():%Y%m%d}.ics",
+        mime="text/calendar",
+        type="primary",
+    )
+    st.download_button(
+        "Download all items (.csv)",
         data=df.to_csv(index=False).encode("utf-8"),
-        file_name=f"stock_ideas_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
+        file_name=f"life_organizer_{date.today():%Y%m%d}.csv",
         mime="text/csv",
     )
 
     st.divider()
-    st.markdown("#### Manage")
-    for _, row in df.iterrows():
-        with st.expander(
-            f"{row['ticker']} · {row['recommendation']} · {row['saved_at']}"
-        ):
-            st.write(f"**Name:** {row['name'] or '—'}")
-            st.write(
-                f"**Composite:** {row['composite']:.0%} · "
-                f"**Fund:** {row['fund_score']:.0%} · "
-                f"**Tech:** {row['tech_score']:.0%} · "
-                f"**Sentiment:** {row['sentiment_label']}"
-            )
-            st.write("**Thesis:**")
-            st.write(row["thesis"] or "_(none)_")
-            if st.button("Delete", key=f"del-{row['id']}"):
-                delete_idea(int(row["id"]))
-                st.rerun()
+    st.markdown("#### Timeline")
+    timeline = df[["due_date", "title", "category", "asset_name", "status"]].copy()
+    timeline.columns = ["Due", "Title", "Category", "Asset", "Status"]
+    st.dataframe(timeline, use_container_width=True, hide_index=True)
 
 
-def main():
-    st.set_page_config(page_title="Stock Idea Analyzer", layout="wide")
-    st.title("Stock Idea Analyzer")
-    st.caption("Pulls live data, runs a fundamentals + technicals + sentiment scorecard.")
+def main() -> None:
+    st.set_page_config(page_title="Life Organizer", page_icon="🗂", layout="wide")
+    st.title("🗂 Life Organizer")
+    st.caption(
+        "Insurance, boat & car repairs, servicing, warrants, registration, "
+        "bills — every renewal in one place, rolled forward automatically."
+    )
 
-    with st.sidebar:
-        ticker = st.text_input("Ticker", value="AAPL").strip().upper()
-        thesis = st.text_area(
-            "Your thesis (optional)",
-            placeholder="Why do you like this stock? Risks?",
-            height=180,
-        )
-        run = st.button("Analyze", type="primary", use_container_width=True)
+    assets = load_assets()
+    raw = load_obligations()
+    df = enrich(raw, assets)
 
-    analyze_tab, saved_tab = st.tabs(["Analyze", "Saved ideas"])
+    dash, items, asset_tab, cal = st.tabs(
+        ["Dashboard", "Items", "Assets", "Calendar & export"])
 
-    with analyze_tab:
-        if run:
-            if not ticker:
-                st.error("Ticker is required.")
-            else:
-                render_analysis(ticker, thesis)
-        else:
-            st.info("Enter a ticker on the left and click **Analyze**.")
+    with dash:
+        render_dashboard(df, assets)
+    with items:
+        render_items(df, assets)
+    with asset_tab:
+        render_assets(assets, raw)
+    with cal:
+        render_calendar(df, assets)
 
-    with saved_tab:
-        render_saved_ideas()
+    st.caption(
+        f"Storage: **{db_backend_label()}** · "
+        "Tick an item off and recurring obligations advance to their next due "
+        "date on their own. This app organises and reminds — it can't sign "
+        "contracts or pay bills for you."
+    )
 
 
 if __name__ == "__main__":
