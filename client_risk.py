@@ -103,6 +103,8 @@ PRESET_INDUSTRIES = [
     "Media", "Other",
 ]
 
+_HIGH_RISK_INDUSTRIES_LC = {i.lower() for i in HIGH_RISK_INDUSTRIES}
+
 
 def _weighted(parts: list[tuple[float, float]]) -> float:
     if not parts:
@@ -201,7 +203,7 @@ def score_external(c: dict) -> tuple[float, list[str]]:
     parts: list[tuple[float, float]] = []
 
     industry = c.get("industry") or "Other"
-    if industry in HIGH_RISK_INDUSTRIES:
+    if industry.lower() in _HIGH_RISK_INDUSTRIES_LC:
         parts.append((0.4, 1.0))
         notes.append(f"Sector: {industry} (historically higher default rate)")
     else:
@@ -497,6 +499,198 @@ def _collect_form() -> dict:
 _RISK_BADGE = {"LOW": "🟢", "MODERATE": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}
 
 
+# ---------- Bulk upload ----------
+
+BULK_COLUMNS = [
+    "client_name", "industry", "country", "years_in_business",
+    "annual_revenue", "employee_count", "relationship",
+    "contract_value", "contract_duration_months",
+    "credit_rating", "late_payments", "avg_days_to_pay",
+    "public_litigation", "regulated_industry",
+    "scope_clarity", "communication",
+    "decision_maker_engaged", "has_references",
+    "cross_border", "currency_volatility", "notes",
+]
+
+_TRUE_VALUES = {"true", "t", "yes", "y", "1"}
+_FALSE_VALUES = {"false", "f", "no", "n", "0", ""}
+_VALID_RELATIONSHIPS = ("New prospect", "Existing client", "Former client")
+
+
+def _is_blank(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, float) and pd.isna(v):
+        return True
+    if isinstance(v, str) and not v.strip():
+        return True
+    return False
+
+
+def _parse_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    if _is_blank(v):
+        return False
+    s = str(v).strip().lower()
+    if s in _TRUE_VALUES:
+        return True
+    if s in _FALSE_VALUES:
+        return False
+    return False
+
+
+def _parse_int(v, default=None):
+    if _is_blank(v):
+        return default
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_float(v, default=None):
+    if _is_blank(v):
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_choice(v, options, default):
+    if _is_blank(v):
+        return default
+    s = str(v).strip().lower()
+    for opt in options:
+        if s == opt.lower():
+            return opt
+    return default
+
+
+def _normalize_row(row: dict) -> dict:
+    return {
+        "client_name": str(row.get("client_name") or "").strip(),
+        "industry": _coerce_choice(row.get("industry"), PRESET_INDUSTRIES, "Other"),
+        "country": (str(row.get("country")).strip() if not _is_blank(row.get("country")) else None),
+        "years_in_business": _parse_int(row.get("years_in_business"), 0),
+        "annual_revenue": _parse_float(row.get("annual_revenue")),
+        "employee_count": _parse_int(row.get("employee_count")),
+        "relationship": _coerce_choice(
+            row.get("relationship"), _VALID_RELATIONSHIPS, "New prospect"
+        ),
+        "contract_value": _parse_float(row.get("contract_value"), 0),
+        "contract_duration_months": _parse_int(row.get("contract_duration_months"), 0),
+        "credit_rating": _coerce_choice(
+            row.get("credit_rating"), list(CREDIT_RATING_MAP.keys()), "Unknown / unrated"
+        ),
+        "late_payments": _parse_int(row.get("late_payments"), 0),
+        "avg_days_to_pay": _parse_int(row.get("avg_days_to_pay"), 30),
+        "public_litigation": _parse_bool(row.get("public_litigation")),
+        "regulated_industry": _parse_bool(row.get("regulated_industry")),
+        "scope_clarity": max(1, min(5, _parse_int(row.get("scope_clarity"), 3))),
+        "communication": max(1, min(5, _parse_int(row.get("communication"), 3))),
+        "decision_maker_engaged": _parse_bool(row.get("decision_maker_engaged")),
+        "has_references": _parse_bool(row.get("has_references")),
+        "cross_border": _parse_bool(row.get("cross_border")),
+        "currency_volatility": _parse_bool(row.get("currency_volatility")),
+        "notes": str(row.get("notes") or "").strip(),
+    }
+
+
+def analyze_one(c: dict, available: set[str]) -> dict:
+    fin, _ = score_financial(c)
+    eng, _ = score_engagement(c)
+    ext, _ = score_external(c)
+    risk_pct, risk_label = overall_risk(fin, eng, ext)
+    recs, rationale = recommend_terms(risk_pct, c, available)
+    return {
+        **c,
+        "financial_score": fin,
+        "engagement_score": eng,
+        "external_score": ext,
+        "risk_score": risk_pct,
+        "risk_label": risk_label,
+        "recommended_terms": recs,
+        "rationale": rationale,
+    }
+
+
+def _template_csv() -> bytes:
+    sample = [
+        {
+            "client_name": "Acme Corp",
+            "industry": "Software / SaaS",
+            "country": "United Kingdom",
+            "years_in_business": 12,
+            "annual_revenue": 25_000_000,
+            "employee_count": 180,
+            "relationship": "Existing client",
+            "contract_value": 30_000,
+            "contract_duration_months": 6,
+            "credit_rating": "A",
+            "late_payments": 0,
+            "avg_days_to_pay": 21,
+            "public_litigation": "no",
+            "regulated_industry": "no",
+            "scope_clarity": 4,
+            "communication": 5,
+            "decision_maker_engaged": "yes",
+            "has_references": "yes",
+            "cross_border": "no",
+            "currency_volatility": "no",
+            "notes": "Repeat client, smooth payment history.",
+        },
+        {
+            "client_name": "Midmarket Retail Ltd",
+            "industry": "Retail",
+            "country": "United Kingdom",
+            "years_in_business": 4,
+            "annual_revenue": 2_000_000,
+            "employee_count": 25,
+            "relationship": "New prospect",
+            "contract_value": 15_000,
+            "contract_duration_months": 4,
+            "credit_rating": "BBB",
+            "late_payments": 0,
+            "avg_days_to_pay": 30,
+            "public_litigation": "no",
+            "regulated_industry": "no",
+            "scope_clarity": 3,
+            "communication": 4,
+            "decision_maker_engaged": "yes",
+            "has_references": "no",
+            "cross_border": "no",
+            "currency_volatility": "no",
+            "notes": "Inbound enquiry; no references yet.",
+        },
+        {
+            "client_name": "New Build Co",
+            "industry": "Construction",
+            "country": "Spain",
+            "years_in_business": 2,
+            "annual_revenue": 400_000,
+            "employee_count": 8,
+            "relationship": "New prospect",
+            "contract_value": 75_000,
+            "contract_duration_months": 9,
+            "credit_rating": "CCC",
+            "late_payments": 0,
+            "avg_days_to_pay": 30,
+            "public_litigation": "yes",
+            "regulated_industry": "no",
+            "scope_clarity": 2,
+            "communication": 3,
+            "decision_maker_engaged": "no",
+            "has_references": "no",
+            "cross_border": "yes",
+            "currency_volatility": "no",
+            "notes": "Subcontractor referral; thin financials and prior dispute.",
+        },
+    ]
+    return pd.DataFrame(sample, columns=BULK_COLUMNS).to_csv(index=False).encode("utf-8")
+
+
 def render_analysis(c: dict, available: set[str]) -> None:
     fin, fin_notes = score_financial(c)
     eng, eng_notes = score_engagement(c)
@@ -622,6 +816,166 @@ def render_saved_tab() -> None:
                 st.rerun()
 
 
+def render_bulk_tab(available: set[str]) -> None:
+    st.markdown(
+        "Upload a **CSV** of clients / projects to score in bulk. "
+        "Missing columns fall back to safe defaults; only `client_name` is required."
+    )
+
+    upload_col, template_col = st.columns([3, 1])
+    file = upload_col.file_uploader(
+        "CSV of clients",
+        type=["csv"],
+        accept_multiple_files=False,
+        key="bulk_uploader",
+    )
+    template_col.download_button(
+        "Download template",
+        _template_csv(),
+        file_name="client_risk_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    with st.expander("Expected columns & accepted values"):
+        st.code(", ".join(BULK_COLUMNS), language=None)
+        st.caption(
+            "Booleans accept: true/false, yes/no, y/n, 1/0. "
+            f"Relationship: {', '.join(_VALID_RELATIONSHIPS)}. "
+            f"Credit rating: {', '.join(CREDIT_RATING_MAP)}. "
+            "Industries map case-insensitively to the preset list; unknown values "
+            "are accepted but skip the high-risk-sector adjustment."
+        )
+
+    if file is not None:
+        file_id = (file.name, file.size)
+        if st.session_state.get("bulk_file_id") != file_id:
+            st.session_state["bulk_file_id"] = file_id
+            st.session_state.pop("bulk_results", None)
+            st.session_state.pop("bulk_skipped", None)
+
+        try:
+            df_raw = pd.read_csv(file)
+        except Exception as e:
+            st.error(f"Could not read CSV: {e}")
+            return
+
+        if df_raw.empty:
+            st.warning("CSV is empty.")
+            return
+
+        df_raw.columns = [str(col).strip().lower().replace(" ", "_") for col in df_raw.columns]
+
+        if "client_name" not in df_raw.columns:
+            st.error("Required column missing: `client_name`.")
+            return
+
+        st.markdown(f"**{len(df_raw)} rows loaded.** Preview:")
+        st.dataframe(df_raw.head(10), use_container_width=True, hide_index=True)
+
+        if st.button("Run bulk risk analysis", type="primary", key="bulk_run"):
+            rows: list[dict] = []
+            skipped: list[str] = []
+            for i, raw in enumerate(df_raw.to_dict(orient="records"), start=2):
+                c = _normalize_row(raw)
+                if not c["client_name"]:
+                    skipped.append(f"row {i} (no client_name)")
+                    continue
+                rows.append(analyze_one(c, available))
+            st.session_state["bulk_results"] = rows
+            st.session_state["bulk_skipped"] = skipped
+
+    rows = st.session_state.get("bulk_results")
+    if not rows:
+        return
+
+    skipped = st.session_state.get("bulk_skipped") or []
+    if skipped:
+        preview = ", ".join(skipped[:5])
+        more = f" (+{len(skipped) - 5} more)" if len(skipped) > 5 else ""
+        st.warning(f"Skipped {len(skipped)} row(s): {preview}{more}")
+
+    st.success(f"Analyzed {len(rows)} client(s).")
+
+    summary = pd.DataFrame([
+        {
+            "Client": r["client_name"],
+            "Industry": r["industry"],
+            "Relationship": r["relationship"],
+            "Contract": r["contract_value"] or 0,
+            "Risk": round(r["risk_score"]),
+            "Label": r["risk_label"],
+            "Top recommendation": (
+                r["recommended_terms"][0] if r["recommended_terms"] else "—"
+            ),
+            "Other terms": "; ".join(r["recommended_terms"][1:]) or "—",
+        }
+        for r in rows
+    ]).sort_values("Risk", ascending=False).reset_index(drop=True)
+
+    counts = (
+        pd.Series([r["risk_label"] for r in rows])
+        .value_counts()
+        .reindex(["LOW", "MODERATE", "HIGH", "CRITICAL"], fill_value=0)
+    )
+    metric_cols = st.columns(4)
+    for col, lbl in zip(metric_cols, ["LOW", "MODERATE", "HIGH", "CRITICAL"]):
+        col.metric(f"{_RISK_BADGE[lbl]} {lbl}", int(counts[lbl]))
+
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    a, b = st.columns(2)
+    a.download_button(
+        "Download results CSV",
+        summary.to_csv(index=False).encode("utf-8"),
+        file_name=f"bulk_client_risk_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    if b.button("Save all profiles", use_container_width=True, key="bulk_save_all"):
+        for r in rows:
+            save_profile(
+                r,
+                r["financial_score"], r["engagement_score"], r["external_score"],
+                r["risk_score"], r["risk_label"],
+                r["recommended_terms"], r["rationale"],
+            )
+        st.success(f"Saved {len(rows)} profile(s) to the database.")
+
+    st.divider()
+    st.markdown("#### Per-client detail")
+    for r in sorted(rows, key=lambda x: x["risk_score"], reverse=True):
+        badge = _RISK_BADGE.get(r["risk_label"], "")
+        header = (
+            f"{r['client_name']} · {badge} {r['risk_label']} "
+            f"({int(r['risk_score'])}) · {r['industry']}"
+        )
+        with st.expander(header):
+            st.write(
+                f"**Country:** {r['country'] or '—'}  |  "
+                f"**Relationship:** {r['relationship']}  |  "
+                f"**Credit rating:** {r['credit_rating']}"
+            )
+            st.write(
+                f"**Contract:** {(r['contract_value'] or 0):,.0f} over "
+                f"{r['contract_duration_months'] or 0} mo  |  "
+                f"**Years trading:** {r['years_in_business']}"
+            )
+            st.markdown("**Recommended terms:**")
+            if r["recommended_terms"]:
+                for term in r["recommended_terms"]:
+                    st.success(f"✓ {term}")
+            else:
+                st.warning("No matching pre-agreed options.")
+            if r["rationale"]:
+                with st.expander("Why these terms?"):
+                    for line in r["rationale"]:
+                        st.caption(f"• {line}")
+            if r.get("notes"):
+                st.markdown("**Notes:**")
+                st.write(r["notes"])
+
+
 def render_sidebar() -> set[str]:
     st.sidebar.markdown("### Pre-agreed payment options")
     st.sidebar.caption(
@@ -647,9 +1001,13 @@ def main() -> None:
     )
 
     available = render_sidebar()
-    analyse_tab, saved_tab = st.tabs(["Analyse", "Saved profiles"])
+    analyse_tab, bulk_tab, saved_tab = st.tabs(
+        ["Analyse", "Bulk upload", "Saved profiles"]
+    )
     with analyse_tab:
         render_analyze_tab(available)
+    with bulk_tab:
+        render_bulk_tab(available)
     with saved_tab:
         render_saved_tab()
 

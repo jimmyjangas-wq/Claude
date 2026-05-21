@@ -44,6 +44,7 @@ streamlit run client_risk.py
 - **Risk scorecard** — financial (50%) + engagement (25%) + external (25%) → composite score 0–100, labelled LOW / MODERATE / HIGH / CRITICAL.
 - **Mitigation engine** — picks a tailored bundle from your pre-agreed payment options (deposits, milestones, escrow, LC, retainer, Net 7/14/30, direct debit, late-payment clause, stage gates, WIP cap, personal guarantee, credit insurance, right to suspend service).
 - **Pre-agreed catalogue** — sidebar checkboxes control which terms the engine is allowed to recommend; defaults are sensible but fully editable per session.
+- **Bulk upload** — drop in a CSV of clients/projects, get the whole list scored in one pass. Download a starter template from the tab, edit it in your spreadsheet, upload, then "Save all profiles" to persist them. Results table is sortable and CSV-exportable; counts by risk tier are summarised at the top.
 - **Saved profiles** — persisted to SQLite (`clients.db`, gitignored) or to the same `DATABASE_URL` as the stock tool. CSV export and per-row delete.
 
 Not legal or credit advice — tune scoring weights and the term catalogue to your business before relying on it.
