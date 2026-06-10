@@ -1,0 +1,36 @@
+{
+  "_comment": "Copy to config.json (gitignored) on your server and fill in. This file lives ONLY on the server - never on the phone. It holds your card, so keep the server private and HTTPS-only.",
+
+  "api_token": "CHANGE-ME-to-a-long-random-string",
+  "_api_token_help": "Shared secret the phone sends as 'Authorization: Bearer <token>'. Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+
+  "vehicle": {
+    "plate": "ABC123",
+    "ruc_vehicle_type": "Powered vehicle - type 1",
+    "ruc_weight": "0 - 3.5 tonnes"
+  },
+
+  "purchase": {
+    "units": 1,
+    "email": "you@example.com"
+  },
+
+  "payment": {
+    "_comment": "Required for the iPhone app (it pays unattended). The form is filled and the order total is read back; if it exceeds max_charge_nzd the payment is REFUSED as a safety rail.",
+    "name_on_card": "",
+    "card_number": "",
+    "expiry": "",
+    "cvc": ""
+  },
+
+  "safety": {
+    "max_charge_nzd": 120.0,
+    "_max_charge_help": "Refuse to submit payment if NZTA's order total is above this. Set a bit above one top-up's real cost to catch surprises (wrong units, rate changes).",
+    "estimate_per_unit_nzd": 76.0,
+    "_estimate_help": "Rough $/1000km shown in the app for confirmation BEFORE buying. Update to the current NZTA rate for your vehicle type; it's only a display estimate, NZTA charges the real amount."
+  },
+
+  "options": {
+    "headless": true
+  }
+}

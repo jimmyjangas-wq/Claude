@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RUC top-up</title>
+  <meta name="theme-color" content="#0b7285" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="RUC" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="card">
+    <h1>RUC top-up</h1>
+
+    <section id="setup" hidden>
+      <p class="muted">First time: paste the access token from your server config.</p>
+      <label>Access token
+        <input id="token" type="password" autocomplete="off" placeholder="Bearer token" />
+      </label>
+      <button id="save-token">Save</button>
+    </section>
+
+    <section id="main" hidden>
+      <p class="plate">Plate <strong id="plate">—</strong></p>
+
+      <label>Current odometer (km)
+        <input id="odometer" type="number" inputmode="numeric" pattern="[0-9]*"
+               placeholder="e.g. 84210" autocomplete="off" />
+      </label>
+
+      <label>Distance to buy
+        <select id="units">
+          <option value="1">1,000 km</option>
+          <option value="2">2,000 km</option>
+          <option value="3">3,000 km</option>
+          <option value="5">5,000 km</option>
+        </select>
+      </label>
+
+      <p id="estimate" class="muted"></p>
+
+      <button id="buy">Buy RUC</button>
+      <button id="change-token" class="link">Change token</button>
+    </section>
+
+    <div id="status" class="status" hidden></div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

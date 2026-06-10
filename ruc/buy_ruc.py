@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Semi-automated personal RUC top-up for New Zealand light vehicles.
+"""Semi-automated personal RUC top-up for New Zealand light vehicles (CLI).
 
 Drives the NZTA "Buy road user charges" web form in a real Chrome window:
 fills your saved vehicle profile, prompts for the current odometer reading,
@@ -8,8 +8,8 @@ selects how much distance to buy, and takes you to the payment page.
 By design it does NOT charge your card unless you pass ``--pay``. The default
 is a safe "fill everything and stop so I can check the amount" run.
 
-This is an unofficial personal tool. NZTA can change their page at any time,
-which may break the field locators below — see VERIFY notes and README.
+For an iPhone / always-on version, see the server/ folder, which reuses the same
+form logic from purchase_core.py.
 
 Usage:
     python buy_ruc.py                      # prompt for odometer, stop at payment
@@ -26,9 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-# transact.nzta.govt.nz is the live RUC purchase portal. This entry URL is
-# correct as of writing; if NZTA moves it, update PURCHASE_URL.
-PURCHASE_URL = "https://transact.nzta.govt.nz/v2/purchase-ruc"
+from purchase_core import PURCHASE_URL, PurchaseError, fill_card, fill_purchase_form
 
 HERE = Path(__file__).parent
 
@@ -54,121 +52,6 @@ def get_odometer(cli_value: int | None) -> int:
         if raw.isdigit():
             return int(raw)
         print("  Please enter digits only.")
-
-
-def fill_purchase(page, cfg: dict, odometer: int, units: int) -> None:
-    """Walk the NZTA purchase form.
-
-    Locators use get_by_label / get_by_role where possible because they are far
-    more stable across site redesigns than CSS classes. Each step is wrapped so
-    a changed page produces a clear, actionable error instead of a stack trace.
-
-    VERIFY: On your first run, watch the browser. If a step can't find its field,
-    the label text below probably needs to match NZTA's current wording. Update
-    the string in the matching page.get_by_label(...) call.
-    """
-    vehicle = cfg["vehicle"]
-    purchase = cfg["purchase"]
-
-    def step(description: str, action):
-        try:
-            action()
-        except Exception as exc:  # noqa: BLE001 - we want a friendly message
-            raise SystemExit(
-                f"\nStuck at step: {description}\n"
-                f"  Underlying error: {exc}\n"
-                f"  The NZTA page layout may have changed. Re-run without --headless,\n"
-                f"  watch where it stops, and update the locator for this step in buy_ruc.py.\n"
-                f"  Tip: `python -m playwright codegen {PURCHASE_URL}` records fresh selectors."
-            ) from exc
-
-    step(
-        "open the RUC purchase page",
-        lambda: page.goto(PURCHASE_URL, wait_until="domcontentloaded"),
-    )
-
-    step(
-        "enter plate number",
-        lambda: page.get_by_label("Plate", exact=False).first.fill(vehicle["plate"]),
-    )
-
-    # Vehicle type / weight are often pre-filled by NZTA from the plate. Only
-    # set them if the config provides a value AND the control is present.
-    if vehicle.get("ruc_vehicle_type"):
-        step(
-            "select RUC vehicle type",
-            lambda: _select_if_present(page, "vehicle type", vehicle["ruc_vehicle_type"]),
-        )
-    if vehicle.get("ruc_weight"):
-        step(
-            "select RUC weight",
-            lambda: _select_if_present(page, "weight", vehicle["ruc_weight"]),
-        )
-
-    step(
-        "enter current odometer reading",
-        lambda: page.get_by_label("odometer", exact=False).first.fill(str(odometer)),
-    )
-
-    # Distance for light vehicles is bought in 1000 km units. Some versions of
-    # the form ask for kilometres, others for "units" - try km first, fall back.
-    km = units * 1000
-    step(
-        "enter distance to buy",
-        lambda: _fill_distance(page, km, units),
-    )
-
-    if purchase.get("email"):
-        step(
-            "enter email for the licence",
-            lambda: _fill_if_present(page, "email", purchase["email"]),
-        )
-
-    step(
-        "continue to payment",
-        lambda: page.get_by_role("button", name="Continue", exact=False).first.click(),
-    )
-
-
-def _select_if_present(page, label_fragment: str, value: str) -> None:
-    loc = page.get_by_label(label_fragment, exact=False)
-    if loc.count() == 0:
-        return  # NZTA pre-filled it from the plate; nothing to do.
-    loc.first.select_option(label=value)
-
-
-def _fill_if_present(page, label_fragment: str, value: str) -> None:
-    loc = page.get_by_label(label_fragment, exact=False)
-    if loc.count() == 0:
-        return
-    loc.first.fill(value)
-
-
-def _fill_distance(page, km: int, units: int) -> None:
-    for label, value in (("distance", km), ("kilometres", km), ("units", units)):
-        loc = page.get_by_label(label, exact=False)
-        if loc.count() > 0:
-            loc.first.fill(str(value))
-            return
-    raise RuntimeError("could not find a distance/units field on the page")
-
-
-def fill_card(page, payment: dict) -> bool:
-    """Auto-fill card fields if all are provided in config. Returns True if filled."""
-    needed = ("name_on_card", "card_number", "expiry", "cvc")
-    if not all(payment.get(k) for k in needed):
-        return False
-    mapping = {
-        "name on card": payment["name_on_card"],
-        "card number": payment["card_number"],
-        "expiry": payment["expiry"],
-        "cvc": payment["cvc"],
-    }
-    for label, value in mapping.items():
-        loc = page.get_by_label(label, exact=False)
-        if loc.count() > 0:
-            loc.first.fill(value)
-    return True
 
 
 def main() -> None:
@@ -205,13 +88,18 @@ def main() -> None:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
-        context = browser.new_context()
-        page = context.new_page()
+        page = browser.new_context().new_page()
 
-        fill_purchase(page, cfg, odometer, units)
+        try:
+            fill_purchase_form(page, cfg, odometer, units)
+        except PurchaseError as exc:
+            print(f"\n{exc}")
+            print(f"Re-run without --headless to watch, or capture selectors with:\n"
+                  f"  python -m playwright codegen {PURCHASE_URL}")
+            browser.close()
+            sys.exit(1)
 
-        filled_card = fill_card(page, cfg.get("payment", {}))
-        if filled_card:
+        if fill_card(page, cfg.get("payment", {})):
             print("Card details auto-filled from config.")
         else:
             print("No card in config - enter your card on the payment screen.")
@@ -223,7 +111,7 @@ def main() -> None:
                 page.wait_for_load_state("networkidle")
                 print("Payment submitted. Check your email for the RUC licence/label.")
             except Exception as exc:  # noqa: BLE001
-                print(f"Could not click the Pay button automatically: {exc}")
+                print(f"Could not click Pay automatically: {exc}")
                 print("Complete the payment manually in the open window.")
         else:
             print("\nForm is filled and waiting on the payment screen.")

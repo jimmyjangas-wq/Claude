@@ -7,5 +7,6 @@ venv/
 .DS_Store
 ideas.db
 
-# RUC tool: real config holds plate/email and possibly card details - never commit it
+# RUC tool: real configs hold plate/email/card details - never commit them
 ruc/config.json
+ruc/server/config.json
