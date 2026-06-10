@@ -6,3 +6,6 @@ venv/
 .streamlit/secrets.toml
 .DS_Store
 ideas.db
+
+# RUC tool: real config holds plate/email and possibly card details - never commit it
+ruc/config.json

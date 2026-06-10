@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy this file to config.json and fill in your details. config.json is gitignored and never committed.",
+
+  "vehicle": {
+    "plate": "ABC123",
+    "_ruc_vehicle_type_help": "The RUC vehicle type label exactly as it appears on the NZTA dropdown, e.g. 'Powered vehicle - type 1 (most cars, vans, utes, SUVs)'. Leave as-is if NZTA pre-fills it from your plate.",
+    "ruc_vehicle_type": "Powered vehicle - type 1",
+    "_ruc_weight_help": "RUC weight band, e.g. '0 - 3.5 tonnes' for a normal light vehicle. Leave blank if NZTA infers it from your plate.",
+    "ruc_weight": "0 - 3.5 tonnes"
+  },
+
+  "purchase": {
+    "_units_help": "RUC for light vehicles is sold in 1000 km units. units=1 buys 1000 km.",
+    "units": 1,
+    "email": "you@example.com"
+  },
+
+  "payment": {
+    "_comment": "OPTIONAL. If you leave card fields blank, the script fills the form and stops on the payment page so you type the card by hand. If you fill them in, the script auto-fills the card too (still won't submit unless you pass --pay). Storing a card here is your own risk; the file is gitignored.",
+    "name_on_card": "",
+    "card_number": "",
+    "expiry": "",
+    "cvc": ""
+  },
+
+  "options": {
+    "_headless_help": "false = a real visible Chrome window you can watch (recommended). true = runs hidden.",
+    "headless": false
+  }
+}
