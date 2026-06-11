@@ -54,6 +54,13 @@
     "use_tls": true
   },
 
+  "vapid": {
+    "_comment": "OPTIONAL. Fill in to enable iPhone push notifications. Generate with: python make_vapid.py (then paste the three values). subject must be a mailto: you control.",
+    "public_key": "",
+    "private_key": "",
+    "subject": "mailto:you@example.com"
+  },
+
   "options": {
     "headless": true
   }

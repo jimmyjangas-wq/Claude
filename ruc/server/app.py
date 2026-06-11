@@ -47,6 +47,7 @@ HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 CONFIG_PATH = HERE / "config.json"
 STATE_PATH = HERE / "reminder_state.json"
+SUBS_PATH = HERE / "push_subscriptions.json"
 
 STATUS_TTL_SECONDS = 6 * 3600
 
@@ -154,7 +155,25 @@ def profile(authorization: str | None = Header(default=None)) -> dict:
         "default_units": CONFIG["purchase"].get("units", 1),
         "estimate_per_unit_nzd": safety.get("estimate_per_unit_nzd"),
         "default_rego_months": CONFIG.get("rego", {}).get("months", 12),
+        "vapid_public_key": CONFIG.get("vapid", {}).get("public_key") or None,
     }
+
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict
+
+
+@app.post("/api/subscribe")
+def subscribe(sub: PushSubscription, authorization: str | None = Header(default=None)) -> dict:
+    """Register a browser's Web Push subscription (deduped by endpoint)."""
+    _check_auth(authorization)
+    subs = _load_json(SUBS_PATH, [])
+    payload = sub.model_dump()
+    subs = [s for s in subs if s.get("endpoint") != sub.endpoint]
+    subs.append(payload)
+    SUBS_PATH.write_text(json.dumps(subs, indent=2))
+    return {"status": "subscribed", "count": len(subs)}
 
 
 def _compute_status() -> dict:
@@ -270,17 +289,59 @@ def renew_rego(req: RegoRequest, authorization: str | None = Header(default=None
 # Email reminders (optional daily job)
 # ---------------------------------------------------------------------------
 
-def _load_state() -> dict:
-    if STATE_PATH.exists():
+def _load_json(path: Path, default):
+    if path.exists():
         try:
-            return json.loads(STATE_PATH.read_text())
+            return json.loads(path.read_text())
         except json.JSONDecodeError:
-            return {}
-    return {}
+            return default
+    return default
+
+
+def _load_state() -> dict:
+    return _load_json(STATE_PATH, {})
 
 
 def _save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=2))
+
+
+def _push_configured() -> bool:
+    v = CONFIG.get("vapid", {})
+    return bool(v.get("public_key") and v.get("private_key"))
+
+
+def _send_push(subject: str, body: str) -> None:
+    if not _push_configured():
+        return
+    try:
+        from pywebpush import WebPushException, webpush
+    except ImportError:
+        print("[reminders] pywebpush not installed; skipping push")
+        return
+    v = CONFIG["vapid"]
+    subs = _load_json(SUBS_PATH, [])
+    payload = json.dumps({"title": subject, "body": body})
+    alive = []
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info=sub,
+                data=payload,
+                vapid_private_key=v["private_key"],
+                vapid_claims={"sub": v.get("subject", "mailto:admin@example.com")},
+            )
+            alive.append(sub)
+        except WebPushException as exc:
+            # 404/410 means the subscription is dead - drop it; keep others.
+            status = getattr(exc.response, "status_code", None)
+            if status in (404, 410):
+                print(f"[reminders] dropping expired push subscription ({status})")
+            else:
+                print(f"[reminders] push failed: {exc}")
+                alive.append(sub)
+    if len(alive) != len(subs):
+        SUBS_PATH.write_text(json.dumps(alive, indent=2))
 
 
 def _smtp_configured() -> bool:
@@ -335,16 +396,22 @@ def _run_reminder_check() -> None:
         if threshold and threshold not in entry["sent"]:
             when = "expired" if days < 0 else f"due in {days} day{'s' if days != 1 else ''}"
             subject = f"{item['label']} {when} - {data['plate']}"
-            body = (f"{item['label']} for {data['plate']} expires {item['expiry']} ({when}).\n\n"
-                    f"Open the RUC app to renew." if key == "rego"
-                    else f"{item['label']} for {data['plate']} expires {item['expiry']} ({when}).\n\n"
-                         f"Book a WoF inspection - it can't be renewed online.")
-            try:
-                _send_email(subject, body)
+            tail = ("Open the RUC app to renew." if key == "rego"
+                    else "Book a WoF inspection - it can't be renewed online.")
+            body = f"{item['label']} for {data['plate']} expires {item['expiry']} ({when}).\n\n{tail}"
+            sent = False
+            if _smtp_configured():
+                try:
+                    _send_email(subject, body)
+                    sent = True
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[reminders] email failed: {exc}")
+            if _push_configured():
+                _send_push(subject, body)
+                sent = True
+            if sent:
                 entry["sent"].append(threshold)
-                print(f"[reminders] emailed {key} ({when})")
-            except Exception as exc:  # noqa: BLE001
-                print(f"[reminders] email failed: {exc}")
+                print(f"[reminders] notified {key} ({when})")
         state[key] = entry
 
     _save_state(state)
@@ -362,11 +429,16 @@ def _reminder_loop() -> None:
 
 @app.on_event("startup")
 def _start_reminders() -> None:
+    channels = []
     if _smtp_configured():
+        channels.append("email")
+    if _push_configured():
+        channels.append("push")
+    if channels:
         threading.Thread(target=_reminder_loop, daemon=True).start()
-        print("[reminders] daily email reminders enabled")
+        print(f"[reminders] daily reminders enabled via {', '.join(channels)}")
     else:
-        print("[reminders] email not configured - in-app status panel only")
+        print("[reminders] no email/push configured - in-app status panel only")
 
 
 # ---------------------------------------------------------------------------

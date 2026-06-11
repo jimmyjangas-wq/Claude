@@ -5,7 +5,7 @@ An "Add to Home Screen" web app for your iPhone that:
 - **Buys RUC** — type the odometer, tap Buy; the server fills NZTA's form and pays.
 - **Renews rego** — pick a 3/6/12-month period, tap Renew.
 - **Shows WoF / rego / RUC expiry** — a colour-coded status panel (green → red).
-- **Emails reminders** (optional) before WoF or rego is due.
+- **Reminds you** before WoF or rego is due — by **email** and/or **iPhone push**.
 
 Your card and plate live **only on the server**.
 
@@ -51,6 +51,18 @@ for Gmail an App Password) to also get a daily email when WoF or rego is within
 `warn_days` / `second_warn_days` of expiry. A `reminder_state.json` file (gitignored)
 remembers what's already been sent so you aren't spammed; it resets automatically
 once you renew.
+
+**iPhone push reminders (optional).** Generate a VAPID key pair and paste it into
+the `vapid` block:
+
+```bash
+python make_vapid.py     # prints public_key / private_key / subject to paste
+```
+
+Then on your iPhone, open the installed app and tap **Enable reminders on this
+iPhone** (push only works once the app is added to the Home Screen — iOS 16.4+).
+Reminders then arrive as native notifications even with the app closed. Email and
+push can both be on; each threshold notifies once.
 
 ## 3. Run it
 
@@ -99,6 +111,24 @@ ruc.yourdomain.nz {
 - **Refuses to pay blind.** If it can't read the total, it aborts rather than
   guessing.
 - **Card never touches the phone.** Only the server stores it.
+
+## Verify the NZTA locators before trusting it
+
+NZTA blocks automated access, so the form locators can't be checked from a
+sandbox/CI box — and verifying a *purchase* would cost real money. Verify on your
+own machine with the included harness, which opens each page visibly and **never
+pays**:
+
+```bash
+cd ..                       # into ruc/
+python verify.py            # expiry (runs fully, it's free) + ruc + rego (stop at payment)
+python verify.py expiry     # just the free lookup
+```
+
+Each check reports PASS/FAIL per field and where it stopped, so any locator that
+needs updating in `purchase_core.py` is obvious. The rego URL was confirmed
+against NZTA's online-services listing; the per-field locators are best-effort
+until you run this.
 
 ## Caveats (same as the CLI)
 

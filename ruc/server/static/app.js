@@ -48,6 +48,7 @@ async function loadProfile() {
   if (profile.default_units) $("units").value = String(profile.default_units);
   if (profile.default_rego_months) $("rego-months").value = String(profile.default_rego_months);
   updateEstimate();
+  maybeShowPushButton();
 }
 
 const LEVEL_TEXT = {
@@ -153,6 +154,54 @@ async function buy() {
   }
 }
 
+function urlBase64ToUint8Array(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+function pushSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+async function enablePush() {
+  if (!profile || !profile.vapid_public_key) return;
+  if (!pushSupported()) {
+    showStatus("This browser can't do push. On iPhone: Add to Home Screen first, then open that.", "err");
+    return;
+  }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") {
+      showStatus("Notifications not allowed.", "err");
+      return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(profile.vapid_public_key),
+    });
+    const res = await fetch("/api/subscribe", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(sub),
+    });
+    if (res.ok) {
+      showStatus("Reminders enabled on this iPhone.", "ok");
+      $("enable-push").hidden = true;
+    } else {
+      showStatus("Could not register for push.", "err");
+    }
+  } catch (err) {
+    showStatus("Push setup failed: " + err.message, "err");
+  }
+}
+
+function maybeShowPushButton() {
+  const show = profile && profile.vapid_public_key && pushSupported();
+  $("enable-push").hidden = !show;
+}
+
 function init() {
   $("save-token").addEventListener("click", async () => {
     const t = $("token").value.trim();
@@ -178,6 +227,7 @@ function init() {
   $("buy").addEventListener("click", buy);
   $("renew-rego").addEventListener("click", renewRego);
   $("refresh").addEventListener("click", () => loadStatus(true));
+  $("enable-push").addEventListener("click", enablePush);
 
   if (!token()) {
     showSetup();

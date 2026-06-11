@@ -11,3 +11,4 @@ ideas.db
 ruc/config.json
 ruc/server/config.json
 ruc/server/reminder_state.json
+ruc/server/push_subscriptions.json

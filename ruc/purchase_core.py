@@ -17,8 +17,9 @@ import re
 PURCHASE_URL = "https://transact.nzta.govt.nz/v2/purchase-ruc"
 # VERIFY: free expiry lookup (WoF / rego / RUC) by plate, no login required.
 CHECK_EXPIRY_URL = "https://transact.nzta.govt.nz/transactions/CheckExpiry/entry"
-# VERIFY: online rego (vehicle licensing) renewal entry point.
-REGO_RENEWAL_URL = "https://transact.nzta.govt.nz/v2/renew-vehicle-licence"
+# VERIFY: online rego (vehicle licensing) renewal entry point. Confirmed via
+# NZTA online-services listing (transact site blocks automated DOM inspection).
+REGO_RENEWAL_URL = "https://transact.nzta.govt.nz/transactions/renewvehiclelicence/entry"
 
 
 class PurchaseError(RuntimeError):
