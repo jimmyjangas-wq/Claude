@@ -46,10 +46,10 @@ Tables are created on first run.
 
 ## Deploy to your own server (Hostinger VPS)
 
-To run it on your own VPS so you can open it on your phone at your own domain,
-see [`deploy/DEPLOY.md`](deploy/DEPLOY.md). Step-by-step: install, run as a
-systemd service, reverse-proxy with nginx, password-protect with basic auth,
-and add free HTTPS via Let's Encrypt.
+For Hostinger's **Docker + Traefik** template (Ubuntu 24.04), see
+[`deploy/DEPLOY.md`](deploy/DEPLOY.md): ship the included Dockerfile via
+`docker compose up -d --build`, and Traefik handles HTTPS, routing and
+password protection automatically.
 
 ## A note on "complete automation"
 

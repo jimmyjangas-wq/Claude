@@ -1,0 +1,47 @@
+# Life Organizer — Docker Compose for Hostinger "Docker + Traefik" VPS.
+#
+# Before `docker compose up -d`:
+#   1. Set LIFE_DOMAIN     in .env or your shell  (e.g. life.yourdomain.com)
+#   2. Set LIFE_AUTH       in .env (Traefik basicauth string — see DEPLOY.md)
+#   3. Confirm TRAEFIK_NETWORK matches your Traefik's external network
+#   4. Confirm CERT_RESOLVER matches your Traefik's Let's Encrypt resolver name
+
+services:
+  life-organizer:
+    build: .
+    image: life-organizer:latest
+    container_name: life-organizer
+    restart: unless-stopped
+    volumes:
+      - life-data:/data
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
+
+      # HTTP entrypoint -> redirect to HTTPS
+      - "traefik.http.routers.life.rule=Host(`${LIFE_DOMAIN}`)"
+      - "traefik.http.routers.life.entrypoints=web"
+      - "traefik.http.routers.life.middlewares=life-redirect"
+      - "traefik.http.middlewares.life-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.life-redirect.redirectscheme.permanent=true"
+
+      # HTTPS entrypoint
+      - "traefik.http.routers.life-secure.rule=Host(`${LIFE_DOMAIN}`)"
+      - "traefik.http.routers.life-secure.entrypoints=websecure"
+      - "traefik.http.routers.life-secure.tls=true"
+      - "traefik.http.routers.life-secure.tls.certresolver=${CERT_RESOLVER:-letsencrypt}"
+      - "traefik.http.routers.life-secure.middlewares=life-auth"
+      - "traefik.http.services.life.loadbalancer.server.port=8501"
+
+      # Password protection
+      - "traefik.http.middlewares.life-auth.basicauth.users=${LIFE_AUTH}"
+
+volumes:
+  life-data:
+
+networks:
+  traefik:
+    name: ${TRAEFIK_NETWORK:-traefik}
+    external: true

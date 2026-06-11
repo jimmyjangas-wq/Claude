@@ -1,161 +1,147 @@
 # Deploying Life Organizer to a Hostinger VPS
 
-These steps put the app on your VPS behind your own domain, with a password
-prompt and HTTPS. Assumes Ubuntu 22.04 / 24.04 (Hostinger's default).
+For Hostinger's **Docker + Traefik** VPS template (Ubuntu 24.04). Traefik
+handles HTTPS, routing, and password protection automatically — you just ship
+the container with the right labels.
 
 End result: open `https://life.yourdomain.com` on your phone, enter your
-password, and your tracker is there. Add it to your home screen.
-
----
+password, tracker is there. Add it to your home screen.
 
 ## 0. Before you start
 
-You need:
-- The VPS IP address (in hPanel → VPS)
-- SSH access (root or sudo)
-- A domain or subdomain you control. Point an **A record** at the VPS IP
-  (e.g. `life.yourdomain.com` → your VPS IP). DNS can take a few minutes.
+- VPS IP from hPanel → VPS
+- A domain or subdomain you control. Add an **A record** for the subdomain
+  (e.g. `life.yourdomain.com`) pointing to your VPS IP. DNS can take a few
+  minutes. Verify with `dig +short life.yourdomain.com` from your laptop.
 
-## 1. SSH into the VPS
+## 1. SSH in
 
 ```bash
 ssh root@YOUR_VPS_IP
 ```
 
-## 2. Install system packages
+## 2. Find your Traefik network and cert resolver name
+
+Hostinger's template configures Traefik with specific defaults. Confirm them:
 
 ```bash
-apt update && apt upgrade -y
-apt install -y python3-venv python3-pip git nginx apache2-utils certbot python3-certbot-nginx
+docker ps                              # find the Traefik container name
+docker network ls                      # find the network Traefik is on
+docker inspect traefik 2>/dev/null \
+  | grep -E 'NetworkMode|certresolvers|entryPoints' -A1
 ```
 
-## 3. Create a dedicated user and clone the repo
+Typical values are:
+- Network: `traefik` (or `proxy`, or `web`)
+- Cert resolver: `letsencrypt` (or `myresolver`)
+
+Note both — you'll plug them in below.
+
+## 3. Clone the repo
 
 ```bash
-adduser --system --group --home /opt/life-organizer lifeorg
 cd /opt
 git clone https://github.com/jimmyjangas-wq/claude.git life-organizer
 cd life-organizer
 git checkout claude/life-organization-tracker-DF9c7
-chown -R lifeorg:lifeorg /opt/life-organizer
 ```
 
-If the repo is private, use a deploy key or a personal access token in the URL:
+If the repo is private, use a personal access token:
 `git clone https://USERNAME:TOKEN@github.com/jimmyjangas-wq/claude.git life-organizer`
 
-## 4. Install Python dependencies in a virtualenv
+## 4. Generate the Traefik basic-auth string
+
+This protects the app with a username/password prompt.
 
 ```bash
-sudo -u lifeorg python3 -m venv /opt/life-organizer/.venv
-sudo -u lifeorg /opt/life-organizer/.venv/bin/pip install --upgrade pip
-sudo -u lifeorg /opt/life-organizer/.venv/bin/pip install -r /opt/life-organizer/requirements.txt
+docker run --rm httpd:alpine htpasswd -nbB james 'PickAStrongPassword'
 ```
 
-## 5. Install and start the systemd service
+Output looks like:
+```
+james:$2y$05$Hkj38d.....
+```
+
+You need to **double every `$`** before pasting into `.env`
+(Compose treats single `$` as a variable). So `$2y$05$Hkj` becomes
+`$$2y$$05$$Hkj`. A quick shell one-liner:
 
 ```bash
-cp /opt/life-organizer/deploy/life-organizer.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now life-organizer
-systemctl status life-organizer    # should say "active (running)"
+docker run --rm httpd:alpine htpasswd -nbB james 'PickAStrongPassword' \
+  | sed 's/\$/\$\$/g'
 ```
 
-If it's not running:
+Copy the output.
+
+## 5. Configure environment
 
 ```bash
-journalctl -u life-organizer -n 50 --no-pager
+cp .env.example .env
+nano .env
 ```
 
-The app is now listening on `127.0.0.1:8501` (not reachable from outside yet).
+Fill in:
 
-## 6. Set up nginx as a reverse proxy with password protection
+```
+LIFE_DOMAIN=life.yourdomain.com
+LIFE_AUTH=james:$$2y$$05$$...        # from step 4 (doubled $)
+TRAEFIK_NETWORK=traefik              # from step 2
+CERT_RESOLVER=letsencrypt            # from step 2
+```
 
-Create the password file (you'll be prompted for a password):
+Save (`Ctrl+O`, Enter, `Ctrl+X`).
+
+## 6. Build and launch
 
 ```bash
-htpasswd -c /etc/nginx/.htpasswd james
+docker compose up -d --build
+docker compose logs -f
 ```
 
-Configure nginx:
+Wait until you see Streamlit say `You can now view your Streamlit app`. Then
+`Ctrl+C` out of logs (the container keeps running).
 
-```bash
-cp /opt/life-organizer/deploy/nginx.conf.example /etc/nginx/sites-available/life-organizer
-sed -i "s/YOUR_DOMAIN/life.yourdomain.com/" /etc/nginx/sites-available/life-organizer
-ln -s /etc/nginx/sites-available/life-organizer /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
-```
+## 7. Open it on your phone
 
-At this point `http://life.yourdomain.com` should prompt for your password and
-load the app. Confirm it does before moving on.
+Visit `https://life.yourdomain.com`. Browser prompts for username + password.
 
-## 7. Add HTTPS (free, via Let's Encrypt)
-
-```bash
-certbot --nginx -d life.yourdomain.com --redirect --agree-tos -m you@yourdomain.com -n
-```
-
-Certbot edits the nginx config to add SSL and auto-renews itself.
-
-## 8. Open it on your phone
-
-Visit `https://life.yourdomain.com`, enter your password, and add the page to
-your home screen:
-- **iPhone (Safari):** Share button → "Add to Home Screen"
+Add to home screen:
+- **iPhone (Safari):** Share → "Add to Home Screen"
 - **Android (Chrome):** ⋮ menu → "Add to Home screen"
 
-It now opens like a native app.
+It now opens like a native app, fullscreen.
 
 ---
 
-## Where your data lives
-
-By default the app uses SQLite — a single file at
-`/opt/life-organizer/life.db`. It survives reboots and redeployments.
-
-**Back it up** by copying that file off the server, e.g.:
-
-```bash
-scp root@YOUR_VPS_IP:/opt/life-organizer/life.db ~/life-backup-$(date +%F).db
-```
-
-Or add a daily cron job on the VPS that copies it to a backups directory.
-
-If you'd prefer Postgres (multiple devices writing, or you want a managed DB):
-
-```bash
-apt install -y postgresql
-sudo -u postgres createuser lifeorg
-sudo -u postgres createdb -O lifeorg lifeorganizer
-sudo -u postgres psql -c "ALTER USER lifeorg WITH PASSWORD 'CHANGE_ME';"
-```
-
-Then edit `/etc/systemd/system/life-organizer.service` and add under `[Service]`:
-
-```
-Environment="DATABASE_URL=postgresql://lifeorg:CHANGE_ME@localhost/lifeorganizer"
-```
-
-`systemctl daemon-reload && systemctl restart life-organizer`.
-
----
-
-## Updating the app later
-
-When you make changes (or I push new features):
+## Updating later
 
 ```bash
 cd /opt/life-organizer
-sudo -u lifeorg git pull
-sudo -u lifeorg /opt/life-organizer/.venv/bin/pip install -r requirements.txt
-systemctl restart life-organizer
+git pull
+docker compose up -d --build
 ```
+
+## Where your data lives
+
+In a Docker named volume `life-organizer_life-data` (a SQLite file inside it).
+Survives container rebuilds and reboots. Back up:
+
+```bash
+docker run --rm -v life-organizer_life-data:/data -v "$PWD":/backup alpine \
+    tar czf /backup/life-$(date +%F).tar.gz -C /data .
+```
+
+Restore the other way. Keep these backups off the server (scp them home).
 
 ## Troubleshooting
 
-- **App won't start:** `journalctl -u life-organizer -n 100 --no-pager`
-- **502 Bad Gateway in browser:** the Streamlit service isn't running — check above.
-- **Domain doesn't resolve:** confirm the A record points to your VPS IP
-  (`dig +short life.yourdomain.com`).
-- **Login prompt loops:** check `/etc/nginx/.htpasswd` exists and is readable
-  by nginx (`chmod 644 /etc/nginx/.htpasswd`).
+- **404 from Traefik:** the router rule isn't matching. Double-check
+  `LIFE_DOMAIN` in `.env` and that DNS resolves to the VPS.
+  `docker compose logs life-organizer` should show Streamlit running.
+- **SSL cert pending:** first request can take 30–60s while Let's Encrypt
+  issues. Check `docker logs traefik` for ACME errors.
+- **Connection refused / Bad Gateway:** the container isn't on Traefik's
+  network. `docker network connect <traefik-network> life-organizer` then
+  fix `TRAEFIK_NETWORK` in `.env`.
+- **Password prompt loops:** the `LIFE_AUTH` value is malformed — make sure
+  every `$` is doubled.
