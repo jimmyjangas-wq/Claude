@@ -10,3 +10,4 @@ ideas.db
 # RUC tool: real configs hold plate/email/card details - never commit them
 ruc/config.json
 ruc/server/config.json
+ruc/server/reminder_state.json

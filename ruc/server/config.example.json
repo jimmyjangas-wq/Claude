@@ -25,9 +25,33 @@
 
   "safety": {
     "max_charge_nzd": 120.0,
-    "_max_charge_help": "Refuse to submit payment if NZTA's order total is above this. Set a bit above one top-up's real cost to catch surprises (wrong units, rate changes).",
+    "_max_charge_help": "Refuse to submit RUC payment if NZTA's order total is above this. Set a bit above one top-up's real cost to catch surprises (wrong units, rate changes).",
     "estimate_per_unit_nzd": 76.0,
     "_estimate_help": "Rough $/1000km shown in the app for confirmation BEFORE buying. Update to the current NZTA rate for your vehicle type; it's only a display estimate, NZTA charges the real amount."
+  },
+
+  "rego": {
+    "_comment": "Vehicle licensing (rego) renewal. Like RUC, it fills the form, reads the real total and refuses to pay above max_charge_nzd.",
+    "months": 12,
+    "max_charge_nzd": 250.0
+  },
+
+  "reminders": {
+    "_comment": "WoF + rego expiry reminders. The in-app status panel always works. Email is sent only if the smtp block below is filled in.",
+    "warn_days": 21,
+    "second_warn_days": 7,
+    "check_hour_local": 8,
+    "email_to": ""
+  },
+
+  "smtp": {
+    "_comment": "OPTIONAL. Fill in to enable email reminders. For Gmail use an App Password, not your normal password.",
+    "host": "",
+    "port": 587,
+    "username": "",
+    "password": "",
+    "from": "",
+    "use_tls": true
   },
 
   "options": {

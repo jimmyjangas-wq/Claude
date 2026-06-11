@@ -90,3 +90,29 @@ button.link {
 .status.ok { background: rgba(43, 138, 62, 0.18); border: 1px solid var(--ok); }
 .status.err { background: rgba(201, 42, 42, 0.18); border: 1px solid var(--err); }
 .status.busy { background: rgba(21, 170, 191, 0.15); border: 1px solid var(--accent-bright); }
+
+h2 { font-size: 1.05rem; margin: 28px 0 4px; }
+
+.panel { margin-top: 8px; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; }
+.panel-head h2 { margin: 28px 0 8px; }
+.panel-head .link { width: auto; margin: 0; padding: 4px 0; }
+
+#status-list { list-style: none; margin: 0; padding: 0; }
+#status-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: #0b1418;
+  border-left: 4px solid #2a3d45;
+  font-size: 0.95rem;
+}
+#status-list li span:last-child { color: var(--muted); text-align: right; }
+.lvl-ok { border-left-color: var(--ok) !important; }
+.lvl-warn { border-left-color: #f59f00 !important; }
+.lvl-urgent { border-left-color: #e8590c !important; }
+.lvl-expired { border-left-color: var(--err) !important; }
+.lvl-expired span:last-child { color: #ff8787 !important; }

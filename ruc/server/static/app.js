@@ -46,7 +46,64 @@ async function loadProfile() {
   profile = await res.json();
   $("plate").textContent = profile.plate;
   if (profile.default_units) $("units").value = String(profile.default_units);
+  if (profile.default_rego_months) $("rego-months").value = String(profile.default_rego_months);
   updateEstimate();
+}
+
+const LEVEL_TEXT = {
+  expired: "EXPIRED",
+  urgent: "due very soon",
+  warn: "due soon",
+  ok: "ok",
+  unknown: "unknown",
+};
+
+function statusLine(item) {
+  let when = "";
+  if (item.days_until === null) when = item.expiry ? `expires ${item.expiry}` : "not found";
+  else if (item.days_until < 0) when = `expired ${-item.days_until} days ago`;
+  else when = `${item.days_until} days (${item.expiry})`;
+  return `<li class="lvl-${item.level}"><span>${item.label}</span><span>${when}</span></li>`;
+}
+
+async function loadStatus(refresh) {
+  $("status-list").innerHTML = '<li class="muted">Checking NZTA…</li>';
+  try {
+    const res = await fetch("/api/status" + (refresh ? "?refresh=1" : ""), { headers: authHeaders() });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $("status-list").innerHTML = `<li class="muted">${data.detail || "Status unavailable"}</li>`;
+      return;
+    }
+    $("status-list").innerHTML = data.items.map(statusLine).join("");
+  } catch (err) {
+    $("status-list").innerHTML = `<li class="muted">Network error: ${err.message}</li>`;
+  }
+}
+
+async function renewRego() {
+  clearStatus();
+  const months = parseInt($("rego-months").value, 10);
+  if (!confirm(`Renew rego for ${profile.plate}, ${months} months?`)) return;
+  $("renew-rego").disabled = true;
+  showStatus("Renewing rego… this can take 20–40 seconds.", "busy");
+  try {
+    const res = await fetch("/api/renew-rego", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ months }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) showStatus(data.detail || `Failed (${res.status}).`, "err");
+    else {
+      showStatus(data.message || "Done.", "ok");
+      loadStatus(true);
+    }
+  } catch (err) {
+    showStatus("Network error: " + err.message, "err");
+  } finally {
+    $("renew-rego").disabled = false;
+  }
 }
 
 function showSetup() {
@@ -106,6 +163,7 @@ function init() {
       await loadProfile();
       showMain();
       clearStatus();
+      loadStatus(false);
     } catch {
       showStatus("That token didn't work.", "err");
     }
@@ -118,11 +176,13 @@ function init() {
 
   $("units").addEventListener("change", updateEstimate);
   $("buy").addEventListener("click", buy);
+  $("renew-rego").addEventListener("click", renewRego);
+  $("refresh").addEventListener("click", () => loadStatus(true));
 
   if (!token()) {
     showSetup();
   } else {
-    loadProfile().then(showMain).catch(() => showSetup());
+    loadProfile().then(() => { showMain(); loadStatus(false); }).catch(() => showSetup());
   }
 }
 

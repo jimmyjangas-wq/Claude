@@ -27,6 +27,15 @@
     <section id="main" hidden>
       <p class="plate">Plate <strong id="plate">—</strong></p>
 
+      <div id="status-panel" class="panel">
+        <div class="panel-head">
+          <h2>Status</h2>
+          <button id="refresh" class="link">Refresh</button>
+        </div>
+        <ul id="status-list"><li class="muted">Loading…</li></ul>
+      </div>
+
+      <h2>Buy RUC</h2>
       <label>Current odometer (km)
         <input id="odometer" type="number" inputmode="numeric" pattern="[0-9]*"
                placeholder="e.g. 84210" autocomplete="off" />
@@ -42,8 +51,18 @@
       </label>
 
       <p id="estimate" class="muted"></p>
-
       <button id="buy">Buy RUC</button>
+
+      <h2>Renew rego</h2>
+      <label>Licence period
+        <select id="rego-months">
+          <option value="3">3 months</option>
+          <option value="6">6 months</option>
+          <option value="12">12 months</option>
+        </select>
+      </label>
+      <button id="renew-rego">Renew rego</button>
+
       <button id="change-token" class="link">Change token</button>
     </section>
 

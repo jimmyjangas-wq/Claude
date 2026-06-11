@@ -1,8 +1,21 @@
-# RUC top-up — iPhone app (PWA + backend)
+# RUC + rego — iPhone app (PWA + backend)
 
-An "Add to Home Screen" web app for your iPhone that buys NZ road user charges
-for your vehicle. You type the odometer and tap **Buy**; the server fills NZTA's
-form headless and pays. Your card and plate live **only on the server**.
+An "Add to Home Screen" web app for your iPhone that:
+
+- **Buys RUC** — type the odometer, tap Buy; the server fills NZTA's form and pays.
+- **Renews rego** — pick a 3/6/12-month period, tap Renew.
+- **Shows WoF / rego / RUC expiry** — a colour-coded status panel (green → red).
+- **Emails reminders** (optional) before WoF or rego is due.
+
+Your card and plate live **only on the server**.
+
+## Endpoints
+
+| Route | Does |
+|-------|------|
+| `GET /api/status` | WoF / rego / RUC expiry dates (cached 6h) |
+| `POST /api/purchase` | Buy RUC (price-capped) |
+| `POST /api/renew-rego` | Renew rego / vehicle licence (price-capped) |
 
 ```
 iPhone (PWA)  ──HTTPS──►  this backend (FastAPI + Playwright)  ──►  NZTA website
@@ -29,7 +42,15 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"   # make a token
 ```
 
 Edit `config.json`: paste the token, your plate/vehicle type, email, **card
-details**, and a `max_charge_nzd` safety cap. Keep this file private.
+details**, and `max_charge_nzd` safety caps (one for RUC, one under `rego`).
+Keep this file private.
+
+**Email reminders (optional).** Leave the `smtp` block blank and you still get
+the in-app status panel. Fill it in (host, from, your `reminders.email_to`, and
+for Gmail an App Password) to also get a daily email when WoF or rego is within
+`warn_days` / `second_warn_days` of expiry. A `reminder_state.json` file (gitignored)
+remembers what's already been sent so you aren't spammed; it resets automatically
+once you renew.
 
 ## 3. Run it
 
