@@ -44,6 +44,13 @@ streamlit run app.py
 `postgres://` URLs are accepted and rewritten to `postgresql://` automatically.
 Tables are created on first run.
 
+## Deploy to your own server (Hostinger VPS)
+
+To run it on your own VPS so you can open it on your phone at your own domain,
+see [`deploy/DEPLOY.md`](deploy/DEPLOY.md). Step-by-step: install, run as a
+systemd service, reverse-proxy with nginx, password-protect with basic auth,
+and add free HTTPS via Let's Encrypt.
+
 ## A note on "complete automation"
 
 This app organises and reminds — it keeps everything in one place, tracks due
